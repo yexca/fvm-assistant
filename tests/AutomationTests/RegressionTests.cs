@@ -1,0 +1,993 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using CefSharp;
+using FvmAssistant.Automation;
+using FvmAssistant.Panel;
+
+namespace FvmAssistant.Tests
+{
+    internal static class RegressionTests
+    {
+        private const BindingFlags Members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        private static readonly BattleLayout Layout = new BattleLayout(1);
+        private static int _passed;
+        private static string _scratch;
+
+        private static object Get(object target, string field) => target.GetType().GetField(field, Members).GetValue(target);
+        private static void Set(object target, string field, object value) => target.GetType().GetField(field, Members).SetValue(target, value);
+        private static object Call(object target, string method, params object[] args) => target.GetType().GetMethod(method, Members).Invoke(target, args);
+        private static object Plan(BattleRunner runner) => ((IList)Get(runner, "_plans"))[0];
+        private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+        private static void Test(string name, Action action) { action(); Console.WriteLine("PASS " + name); _passed++; }
+
+        private static int Main()
+        {
+            _scratch = Path.Combine(Path.GetTempPath(), "fvm-automation-tests-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_scratch);
+            try
+            {
+                Test("timed-only maps, aliases, explicit overrides and fixed support", CarrierDefaults);
+                Test("late first attempt gets retries and future events remain reachable", TimedRetries);
+                Test("completed events stay complete when a late rejection is restored", LateSchedule);
+                Test("last empty cell can be probed again after a transient failure", LastEmptyCell);
+                Test("unknown-cell probes rotate instead of starving later cells", ProbeFairness);
+                Test("card colors survive moving backgrounds and short occlusions", Presence);
+                Test("ownership refresh detects loss in a fully occupied column", RefreshOwnership);
+                Test("unverified animated ownership eventually returns to probing", UnverifiedOwnership);
+                Test("placement learns the held card through the existing IO interface", HeldSignatureLearning);
+                Test("real placement confirmation restores a late-rejected timed step", PlacementRollback);
+                Test("refused timed support stays pending", RefusedSupport);
+                Test("timed cloud activation blocks ordinary cards until support exists", SupportDependency);
+                Test("preflight reports damaged input without silently accepting omitted steps", InvalidTracks);
+                Test("fractional track steps retain tenths through scheduling and support", FractionalSteps);
+                Test("preflight distinguishes active conditions, skipped cards and defaults", SelectedCompatibility);
+                Test("flame digits distinguish zero from unreadable frames", FlameDigits);
+                Test("condition clocks, triggers and termination use confirmed placements", ConditionSemantics);
+                Test("card-count conditions use observed ordinary cards", CardCountConditions);
+                Test("layer-5 targets occupied cells without claiming board ownership", SpecialCardTargets);
+                Test("preflight blocks unsupported timing, waves, flags and headers", UnsupportedTracks);
+                Test("scheduled fill uses timed 00 events without clicking a zero cell", ScheduledFill);
+                Test("synchronized timing pauses for ordinary placements", SynchronizedTiming);
+                Test("track card rate limit accepts only the declared attempt cadence", PlantSpeed);
+                Test("step editor preserves source lines and supports undo, redo and copy save", TrackEditing);
+                Test("track editor and board preview construct on a WinForms UI thread", TrackEditorUi);
+                Test("effective deck includes inherited and fixed support across stage changes", EffectiveSupportDeck);
+                Test("malformed support data cannot bypass preflight", InvalidSupportData);
+                Test("controller rejects incompatible tracks before browser or card access", StartPreflight);
+                Test("loop uses the checked snapshot and rejects invalid data before creating a run", PreflightSnapshot);
+                Test("generated tracks retain elapsed shovel timing and pass preflight", GeneratedCompatibility);
+                Test("duo commands reject stale runs and out-of-order gates", DuoGates);
+                Test("duo preflight enforces disjoint ordinary formations", DuoPlans);
+                Test("local room masks read a stable room ID and find only its list entry", RoomNumbers);
+                Console.WriteLine("Automation regressions passed: " + _passed);
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+            finally
+            {
+                var full = Path.GetFullPath(_scratch);
+                var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (full.StartsWith(temp, StringComparison.OrdinalIgnoreCase) && Path.GetFileName(full).StartsWith("fvm-automation-tests-"))
+                    Directory.Delete(full, true);
+            }
+        }
+
+        private static TrackCard Card(string line) => TrackFile.Parse(line).Opening.Cards[0];
+
+        private static TrackCompatibilityReport Inspect(string text, string[] selected = null, bool shovel = false) =>
+            new TrackPreflight(TrackFile.Parse(text), null).Inspect(selected, shovel);
+
+        private static bool Has(TrackCompatibilityReport report, string code, string severity = "error") =>
+            report.Diagnostics.Any(d => d.Code == code && d.Severity == severity);
+
+        private static void InvalidTracks()
+        {
+            var malformed = Inspect("Card\t7[3]独\t035.55|49");
+            Check(!malformed.CanStart && Has(malformed, "bad-step"), "Unsupported precision must block a truncated run");
+            Check(malformed.Diagnostics[0].Line == 1 && malformed.Diagnostics[0].Card == "Card", "Diagnostic must identify source location");
+            foreach (var cell in new[] { "00", "80", "19x" })
+                Check(!Inspect("Card\t7[3]独\t010|" + cell).CanStart, "Invalid cell must not reach geometry: " + cell);
+            Check(Has(Inspect("Card\t999999999999[3]\t000|11"), "bad-card-spec"), "Numeric overflow must become a diagnostic");
+            Check(Has(Inspect("Card\t7[3]独\t999999999999|11"), "bad-step"), "Time overflow must become a diagnostic");
+            Check(Has(Inspect("Card\t\nOther\t7[3]补极\t000|11"), "bad-card-spec"), "Empty specification must not disappear");
+            Check(Has(Inspect("\t7[3]补极\t000|11"), "empty-card"), "Blank names are invalid");
+            Check(Has(Inspect("Card\t7[3]补极\t000|11\nCard\t7[3]补极\t000|12"), "duplicate-card"), "Duplicate names must block ambiguous mappings");
+        }
+
+        private static void FractionalSteps()
+        {
+            var track = TrackFile.Parse("Card\t7[3]独\t035.5|49\t042|39");
+            Check(new TrackPreflight(track, null).Inspect().CanStart, "A one-decimal timed card should pass preflight");
+            Check(track.Opening.Cards[0].Steps[0].TimeDeciseconds == 355 &&
+                track.Opening.Cards[0].Steps[0].TimeText == "35.5" &&
+                track.Opening.Cards[0].Steps[0].EditorTimeText == "035.5", "Tenths must survive parsing and formatting");
+            var schedule = new PlacementSchedule(track.Opening.Cards[0].Steps);
+            var now = DateTime.UtcNow;
+            Check(schedule.Next(35.49, now, false) == null && schedule.Next(35.5, now, false) == 0,
+                "A fractional step must not fire at the previous whole second");
+            Check(Has(Inspect("Card\t7[3]独\t000.5|49"), "invalid-time"), "Nonzero times below one second are invalid");
+            Check(Has(Inspect("Card\t7[3]独\t960.1|49"), "invalid-time"), "The 960-second limit also applies to tenths");
+
+            var runner = Runner("Sync\t7[3]\t010.5|11\nIndependent\t7[3]独\t010.5|12", Frame(Color.Black));
+            var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            Set(runner, "_start", start);
+            Set(runner, "_synchronizedPlacementTime", TimeSpan.FromSeconds(4));
+            var plans = (IList)Get(runner, "_plans");
+            Check(!(bool)Call(runner, "IsDue", plans[0], start.AddMilliseconds(14499)) &&
+                (bool)Call(runner, "IsDue", plans[0], start.AddMilliseconds(14500)),
+                "A synchronized fractional deadline must include placement time");
+            Check(!(bool)Call(runner, "IsDue", plans[1], start.AddMilliseconds(10499)) &&
+                (bool)Call(runner, "IsDue", plans[1], start.AddMilliseconds(10500)),
+                "An independent fractional deadline must use real battle time");
+
+            var folder = Path.Combine(_scratch, "fractional-support", "承载轨道", "1Test");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "1Cloud.txt"), "棉花糖\t7[1]独\t010.5|12");
+            var support = CarrierMap.Find(Path.Combine(_scratch, "fractional-support"),
+                new LevelEntry { Island = "Test", Name = "Cloud" }, null);
+            Check(support != null && support.Resolve(Card("麦芽糖\t7[1]继")).Steps[0].TimeDeciseconds == 105,
+                "Inherited support must retain fractional timing");
+        }
+
+        private static void SelectedCompatibility()
+        {
+            const string plain = "\uFEFF人物1位置=11\n退出时间=0\n魔塔层数=0\n移动板块=0\n放卡限速=0\n刷技能模式=0\n卡槽数=2\n" +
+                "宝石\t120[0],0,0,0\n铲子\t0[0]独\t010|21\n" +
+                "Basic\t7[3]补极锁,0,0,0,0,NULL,0,NULL,0,0,0,NULL,0,0\t000|11\n" +
+                "Expensive\t7[3]补极,0,0,200\t000|12";
+            var selected = Inspect(plain, new[] { "Basic" });
+            Check(selected.CanStart && Has(selected, "card-skipped", "warning"), "An intentionally skipped conditional card must not block execution");
+            Check(Has(selected, "shovel-skipped", "warning") && !Has(selected, "gem-action"), "Default gem fields are inert; disabled shovel is visible");
+            var all = Inspect(plain);
+            Check(!all.CanStart && Has(all, "flame-assets-missing"), "A conditional card requires readable digit masks");
+            Check(all.Diagnostics.Any(d => d.Card == "Expensive" && d.Message.Contains("Flame")), "Report must identify the missing flame input");
+            Check(new TrackPreflight(TrackFile.Parse(plain), null, TestFlameReader()).Inspect().CanStart,
+                "A selected basic flame condition can run with installed masks");
+            Check(Inspect(plain, new[] { "Basic" }, true).CanStart, "Independent timed shovel is supported");
+            Check(!Inspect(plain, new string[0]).CanStart, "An empty selection is not a runnable deck");
+            Check(Has(Inspect(plain, new[] { "Missing" }), "unknown-mapping"), "A stale mapping must fail before input");
+            Check(Inspect("Basic\t7[3]独,0,0,200\t010|11").CanStart, "Conditions without 极 are inactive in this track mode");
+            Check(Has(Inspect("Card\t7[3]补极,0,0,0,1\t000|11"), "conditions-unsupported"), "Wave conditions remain blocked");
+            Check(Has(Inspect("Card\t7[3]补极,-1,0,0\t000|11"), "condition-format"), "Malformed basic conditions must not become zero");
+        }
+
+        private static bool[] DigitMask(int digit)
+        {
+            string segments = new[] { "abcdef", "bc", "abged", "abgcd", "fgbc", "afgcd", "afgecd", "abc", "abcdefg", "abcdfg" }[digit];
+            var mask = new bool[60];
+            void Line(char segment, int x1, int y1, int x2, int y2)
+            {
+                if (!segments.Contains(segment)) return;
+                for (int y = y1; y <= y2; y++)
+                    for (int x = x1; x <= x2; x++) mask[y * 6 + x] = true;
+            }
+            Line('a', 1, 0, 4, 0); Line('b', 5, 1, 5, 4); Line('c', 5, 5, 5, 8);
+            Line('d', 1, 9, 4, 9); Line('e', 0, 5, 0, 8); Line('f', 0, 1, 0, 4);
+            Line('g', 1, 5, 4, 5);
+            return mask;
+        }
+
+        private static FlameReader TestFlameReader()
+        {
+            var folder = Path.Combine(_scratch, "附加程序", "数字", "火苗");
+            Directory.CreateDirectory(folder);
+            for (int digit = 0; digit < 10; digit++)
+            {
+                using (var bitmap = new Bitmap(6, 10))
+                {
+                    var mask = DigitMask(digit);
+                    for (int y = 0; y < 10; y++)
+                        for (int x = 0; x < 6; x++)
+                            bitmap.SetPixel(x, y, mask[y * 6 + x] ? Color.White : Color.Black);
+                    bitmap.Save(Path.Combine(folder, digit + ".png"), ImageFormat.Png);
+                }
+            }
+            return FlameReader.Load(_scratch);
+        }
+
+        private static StageFrame FlameFrame(int value, int slotCount = 1)
+        {
+            string digits = value.ToString();
+            int[] offset = { 0, 0, 4, 7, 11, 14 };
+            return Frame(Color.White, bitmap =>
+            {
+                for (int position = 0; position < digits.Length; position++)
+                {
+                    int x0 = (slotCount > 12 ? 151 : 172) + position * 7 - offset[digits.Length];
+                    var mask = DigitMask(digits[position] - '0');
+                    for (int y = 0; y < 10; y++)
+                        for (int x = 0; x < 6; x++)
+                            if (mask[y * 6 + x]) bitmap.SetPixel(x0 + x, 75 + y, Color.Black);
+                }
+            });
+        }
+
+        private static StageFrame StrokeFlameFrame(int value)
+        {
+            string digits = value.ToString();
+            return Frame(Color.White, bitmap =>
+            {
+                int first = 172 - (digits.Length - 1) * 4;
+                for (int position = 0; position < digits.Length; position++)
+                {
+                    int digit = digits[position] - '0';
+                    int x0 = first + position * 9;
+                    if (digit == 1)
+                    {
+                        for (int y = 0; y < 10; y++)
+                            for (int x = 2; x <= 3; x++) bitmap.SetPixel(x0 + x, 77 + y, Color.Black);
+                        continue;
+                    }
+                    var mask = DigitMask(digit);
+                    for (int y = 0; y < 9; y++)
+                        for (int x = 0; x < 6; x++)
+                            if (mask[y * 6 + x]) bitmap.SetPixel(x0 + x, 77 + y, Color.Black);
+                }
+            });
+        }
+
+        private static void FlameDigits()
+        {
+            var reader = TestFlameReader();
+            Check(reader != null, "Synthetic digit masks must load");
+            foreach (int value in new[] { 0, 5, 42, 200, 15000 })
+                Check(reader.Read(FlameFrame(value)) == value, "Read flame value " + value);
+            Check(reader.Read(FlameFrame(200, 13), 13) == 200, "Counter must follow the shifted 13-slot bar");
+            Check(reader.Read(FlameFrame(15001)) == null, "An out-of-range counter must not become a shorter partial value");
+            foreach (int value in new[] { 0, 200, 3531, 9876, 15000 })
+            {
+                int? observed = reader.Read(StrokeFlameFrame(value));
+                Check(observed == value, "Wider stroke font must read " + value + "; got " + (observed?.ToString() ?? "unknown"));
+            }
+            Check(reader.Read(StrokeFlameFrame(15001)) == null, "Wider font must reject out-of-range totals");
+            Check(reader.Read(Frame(Color.White)) == null, "An unreadable counter is unknown, not zero");
+            Check(reader.Read(FlameFrame(200)) == 200 && reader.Read(Frame(Color.White)) == null,
+                "A prior valid reading must not survive an unreadable frame");
+        }
+
+        private static void ConditionSemantics()
+        {
+            var parsed = TrackConditions.Parse("2,0,200,0,NULL,0,NULL,0,0,0,NULL,2,10");
+            Check(parsed.Errors.Count == 0 && parsed.MinimumFlames == 200 && parsed.TerminationCount == 2 && parsed.TerminationSeconds == 10,
+                "Condition fields must retain their typed values");
+            var start = new DateTime(2026, 9, 26, 0, 0, 0, DateTimeKind.Utc);
+            var gate = new ConditionGate(parsed);
+            Check(!gate.Allows(start, start, null) && !gate.Allows(start, start, 0), "Unknown and zero cannot meet a positive threshold");
+            Check(!gate.Allows(start, start, 200), "Delay starts when the threshold is observed");
+            Check(!gate.Allows(start.AddSeconds(1), start, null), "A lost reading resets maintenance delay");
+            Check(!gate.Allows(start.AddSeconds(2), start, 200) && gate.Allows(start.AddSeconds(4), start, 200),
+                "Maintenance delay must restart after unknown input");
+            gate.Placed();
+            Check(!gate.Allows(start.AddSeconds(5), start, 200) && gate.Allows(start.AddSeconds(7), start, 200),
+                "A confirmed placement restarts maintenance delay");
+            gate.Placed();
+            Check(gate.Stopped(start.AddSeconds(8), start) && !gate.Allows(start.AddSeconds(8), start, 200),
+                "Termination count blocks additional placements");
+            gate.RollBack();
+            Check(gate.SuccessfulPlacements == 1 && !gate.Allows(start.AddSeconds(11), start, 200),
+                "Late rejection restores the count but cannot extend the termination time");
+
+            var trigger = new ConditionGate(TrackConditions.Parse("1,1,200"));
+            Check(!trigger.Allows(start, start, 200) && trigger.Allows(start.AddSeconds(1), start, null),
+                "Trigger mode latches after its delay despite a later unreadable frame");
+            trigger.Placed();
+            Check(trigger.Allows(start.AddSeconds(2), start, null), "A triggered card stays enabled for later attempts");
+        }
+
+        private static void CardCountConditions()
+        {
+            const string track = "狮子座\t35[3]补极\t000|12\n冰激凌\t42[5]x补极,0,0,0,,狮子座,1\t000|12";
+            Check(Inspect(track).CanStart, "Editor lock, layer-5 placement and a selected ordinary-card count should be accepted");
+            Check(Has(Inspect(track, new[] { "冰激凌" }), "condition-card-missing"),
+                "The card named by a count condition must be selected");
+            Check(Has(Inspect("冰激凌\t42[5]x补极,0,0,0,,冰激凌,1\t000|12"), "condition-card-layer"),
+                "A transient special card must not be counted as board occupancy");
+            Check(Has(Inspect("冰激凌\t42[5]x补极,0,0,0,,狮子座\t000|12"), "condition-format"),
+                "A count condition without a positive count must fail preflight");
+
+            var now = DateTime.UtcNow;
+            var opening = Frame(Color.Black);
+            var visible = Frame(Color.Black, b => PaintCard(b, Layout.CardRegion(new Cell(1, 2))));
+            var runner = Runner("狮子座\t35[3]补极\t000|12", opening);
+            var cell = new Cell(1, 2);
+            var own = Own(runner, cell, opening, visible, now);
+            Set(own, "After", null);
+            Check((int)Call(runner, "ObservedCardCount", "狮子座", visible, now) == 0,
+                "A click without positive board evidence must not satisfy the condition");
+            Set(own, "After", visible.Crop(Layout.CellInterior(cell)));
+            Check((int)Call(runner, "ObservedCardCount", "狮子座", visible, now.AddSeconds(6)) == 1,
+                "A visibly present ordinary card must satisfy a one-card condition");
+            var gate = new ConditionGate(TrackConditions.Parse("0,0,0,0,狮子座,1"));
+            Check(!gate.Allows(now, now, null, 0) && gate.Allows(now, now, null, 1),
+                "Only the observed count opens the condition gate");
+        }
+
+        private static void SpecialCardTargets()
+        {
+            var now = DateTime.UtcNow;
+            var cell = new Cell(1, 2);
+            var io = new FakeIo { RenderCard = true };
+            var runner = Runner("冰激凌\t42[5]x补极\t000|12", io.Grab(), io);
+            var plan = Plan(runner);
+            var occupied = Frame(Color.Black, b => PaintCard(b, Layout.CardRegion(cell)));
+            var targets = (List<Cell>)Call(runner, "SpecialTargets", plan, now);
+            Check(targets.Count == 1 && targets[0].Equals(cell), "A layer-5 target may already hold another card");
+            Check(((Task<bool>)Call(runner, "PlaceAsync", plan, occupied, CancellationToken.None, null)).GetAwaiter().GetResult(),
+                "A ready layer-5 card should use its formation cell");
+            Check(((IDictionary)Get(plan, "Own")).Count == 0 && runner.Placements == 1,
+                "A transient special card must not claim ordinary-card ownership");
+        }
+
+        private static void UnsupportedTracks()
+        {
+            const string card = "Card\t7[3]补极\t000|11";
+            Check(Has(Inspect(card + "\n--第1波--\nCard\t7[3]继"), "later-waves"), "Later waves cannot silently become opening-only execution");
+            Check(Has(Inspect("人物1位置=89\n" + card), "header-unsupported"), "Invalid character cells must not be silently discarded");
+            foreach (var header in new[] { "退出时间=15", "放卡限速=6", "移动板块=1", "Unknown=1" })
+                Check(Has(Inspect(header + "\n" + card), "header-unsupported"), "Unsupported header: " + header);
+            Check(Inspect("放卡限速=5\n" + card).CanStart, "Valid card rate limit must pass preflight");
+            var solo = Inspect("人物1位置=62,52\n人物2位置=22,32\n优先队列=Other\n" +
+                "Card\t7[3]补极\t000|11\nOther\t7[3]补极\t000|12", new[] { "Card" });
+            Check(solo.CanStart && Has(solo, "second-player-ignored", "warning") &&
+                Has(solo, "card-skipped", "warning") && Has(solo, "queue-card-skipped", "warning"),
+                "A solo track must run with its second-player layout and an intentionally omitted queue card");
+            Check(Has(Inspect("退出时间=15\n退出时间=0\n" + card), "duplicate-header"), "Repeated headers must not erase unsupported behavior");
+            Check(Inspect("Card\t7[3]\t010|11").CanStart, "Synchronized ordinary timing must pass preflight");
+            Check(Inspect("瓜皮\t15[2]补极\t035|49\t000|59").CanStart,
+                "A synchronized extreme formation with a timed start must pass preflight");
+            Check(Inspect("Card\t7[3]独\t010|11\t020|12").CanStart, "Independent ordinary timing remains available");
+            Check(Has(Inspect("Card\t7[3]补极独\t005|11\t010|12"), "timed-prefix"), "Mixed timing and filling need dedicated semantics");
+            Check(Has(Inspect("Card\t7[3]补极索\t000|11"), "flag-unsupported"), "Targeting flag must not disappear");
+            Check(Has(Inspect("Card\t7[3]补极\t000|11\n宝石\t120[0]极"), "gem-action"), "Active gem rows require a dedicated executor");
+            Check(Has(Inspect("优先队列=Absent\n" + card), "queue-card-missing"), "Unknown queue entries must not disappear");
+            Check(Inspect("Card\t7[3]补独\t010|11\t020|00").CanStart,
+                "Scheduled fill with a playable formation and 00 timer should pass preflight");
+            Check(Has(Inspect("Card\t7[3]补独\t010|00"), "scheduled-fill-cells"),
+                "A marker-only fill row has no safe target");
+            Check(Has(Inspect("Card\t7[3]独\t010|00"), "invalid-cell"),
+                "00 must not reach geometry on an ordinary timed row");
+            Check(Has(Inspect("Card\t7[3]独\t000|11\t010|12"), "zero-time-schedule"), "Formation markers must not become timed placements");
+            var deck = TrackFile.Parse(string.Join("\n", Enumerable.Range(1, 12).Select(i => "Card" + i + "\t7[3]补极\t000|11")));
+            Check(Has(new TrackPreflight(deck, null).Inspect(null, false, DeckBuilder.DeckSlots), "deck-capacity"), "Automatic deck building must respect room capacity");
+        }
+
+        private static void ScheduledFill()
+        {
+            const string text = "Card\t7[3]补独\t001|12\t002|00";
+            var io = new FakeIo();
+            var runner = Runner(text, io.Grab(), io);
+            var plan = Plan(runner);
+            var schedule = (PlacementSchedule)Get(plan, "Schedule");
+            Check(schedule.Pending == 2, "Both timed entries must become schedule events");
+            schedule.Complete(0);
+            Set(runner, "_start", DateTime.UtcNow.AddSeconds(-3));
+            Check((bool)Call(runner, "IsDue", plan, DateTime.UtcNow), "The 00 entry must activate a timed fill sweep");
+            Check(((Task<bool>)Call(runner, "PlaceAsync", plan, io.Grab(), CancellationToken.None, null))
+                .GetAwaiter().GetResult(), "A timed marker should place into its playable formation");
+            Check(schedule.Done && io.CellClicks.SequenceEqual(new[] { new Cell(1, 2) }),
+                "The marker event must complete without a click at 00");
+
+            var opening = Frame(Color.Black);
+            var full = Runner(text, opening);
+            var fullPlan = Plan(full);
+            var fullSchedule = (PlacementSchedule)Get(fullPlan, "Schedule");
+            fullSchedule.Complete(0);
+            Set(full, "_start", DateTime.UtcNow.AddSeconds(-3));
+            Own(full, new Cell(1, 2), opening, opening, DateTime.UtcNow);
+            Check(!((Task<bool>)Call(full, "PlaceAsync", fullPlan, opening, CancellationToken.None, null))
+                .GetAwaiter().GetResult() && fullSchedule.Done && (bool)Get(fullPlan, "HandledEvent"),
+                "A full formation consumes its timed sweep without attempting invalid input");
+        }
+
+        private static void SynchronizedTiming()
+        {
+            var runner = Runner("Sync\t7[3]\t010|11\nIndependent\t7[3]独\t010|12\n" +
+                "瓜皮\t15[2]补极\t035|49\t000|59", Frame(Color.Black));
+            var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            Set(runner, "_start", start);
+            Set(runner, "_synchronizedPlacementTime", TimeSpan.FromSeconds(4));
+            var plans = (IList)Get(runner, "_plans");
+            Check(!(bool)Call(runner, "IsDue", plans[0], start.AddSeconds(11)),
+                "A synchronized step waits for time spent placing another ordinary card");
+            Check((bool)Call(runner, "IsDue", plans[1], start.AddSeconds(11)),
+                "An independent step keeps its real-time deadline");
+            Check((bool)Call(runner, "IsDue", plans[0], start.AddSeconds(14)),
+                "The synchronized step becomes due after the offset");
+            Check(!(bool)Call(runner, "IsDue", plans[2], start.AddSeconds(36)),
+                "A synchronized extreme card uses the same delayed start clock");
+            Check((bool)Call(runner, "IsDue", plans[2], start.AddSeconds(39)),
+                "The extreme card starts when synchronized time reaches its first marker");
+        }
+
+        private static void PlantSpeed()
+        {
+            var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var runner = Runner("放卡限速=2\nCard\t7[3]补极\t000|11", Frame(Color.Black));
+            Set(runner, "_lastCardActionAt", start);
+            Check(!(bool)Call(runner, "CardRateReady", start.AddMilliseconds(499)) &&
+                  (bool)Call(runner, "CardRateReady", start.AddMilliseconds(500)),
+                "Two cards per second requires at least 500 ms between attempts");
+            var unlimited = Runner("放卡限速=0\nCard\t7[3]补极\t000|11", Frame(Color.Black));
+            Set(unlimited, "_lastCardActionAt", start);
+            Check((bool)Call(unlimited, "CardRateReady", start), "Zero retains the normal runner cadence");
+        }
+
+        private static void TrackEditing()
+        {
+            var source = Path.Combine(_scratch, "source-track.txt");
+            const string original = "注释=keep this header\nCard\t7[3]补极\t000|11\t035.5|49\n--第1波--\nOther\t8[3]独\t010|12";
+            File.WriteAllText(source, original);
+            var document = new TrackEditDocument(source, original);
+            document.SetStep(2, 1, "040.5|39");
+            document.SetStep(4, 1, "020|22");
+            document.MoveStep(4, 1, -1);
+            document.SetSpec(4, "9[3]补独");
+            document.SetHeader("放卡限速", "2");
+            Check(document.Track.Waves[1].Cards[0].Steps.Count == 2 &&
+                  document.Text.Contains("注释=keep this header"),
+                "Editing a later-wave row must preserve all other lines and headers");
+            Check(document.Track.Waves[1].Cards[0].Steps[0].TimeDeciseconds == 200 &&
+                  document.Track.Waves[1].Cards[0].CooldownSec == 9 &&
+                  document.Track.Waves[1].Cards[0].Fill && document.Track.PlantSpeed == 2,
+                "Step order, card specification, and header edits must survive reparsing");
+            document.RemoveStep(3, 0);
+            document.Undo();
+            Check(document.Track.Opening.Cards[0].Steps.Count == 2, "Undo must restore the removed step");
+            document.Redo();
+            Check(document.Track.Opening.Cards[0].Steps.Count == 1, "Redo must remove it again");
+            var folder = Path.Combine(_scratch, "edited-tracks");
+            var saved = Path.Combine(folder, "copy.txt");
+            document.SaveCopy(saved, folder);
+            Check(File.ReadAllText(source) == original && File.ReadAllText(saved) == document.Text,
+                "Saving an edit must write only a new copy");
+            bool rejected = false;
+            try { document.SaveCopy(source, folder); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "The editor cannot replace a source outside its private output folder");
+        }
+
+        private static void TrackEditorUi()
+        {
+            var source = Path.Combine(_scratch, "ui-track.txt");
+            File.WriteAllText(source, "Card\t7[3]补极\t000|11\t035.5|49");
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var editor = new TrackEditorDialog(source, null))
+                    using (var preview = new TrackPreviewDialog(
+                        new TrackPreflight(TrackFile.Load(source), null), new[] { "Card" }))
+                    {
+                        Check(editor.Handle != IntPtr.Zero && preview.Handle != IntPtr.Zero,
+                            "Both dialogs must create a native WinForms handle");
+                        editor.PerformLayout();
+                        preview.PerformLayout();
+                    }
+                }
+                catch (Exception error) { failure = error; }
+            }) { IsBackground = true };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Check(thread.Join(10000), "UI dialog construction timed out");
+            if (failure != null) throw failure;
+        }
+
+        private static void EffectiveSupportDeck()
+        {
+            var folder = Path.Combine(_scratch, "effective", "承载轨道", "1Test");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "1Cloud.txt"), "棉花糖\t7[1]独\t010|12\t020|22");
+            File.WriteAllText(Path.Combine(folder, "2Water.txt"), "木盘子\t7[1]\t000|13\t000|23");
+            var root = Path.Combine(_scratch, "effective");
+            var track = TrackFile.Parse("麦芽糖\t7[1]继绝\nCard\t7[3]补极\t000|12");
+            var cloud = CarrierMap.Find(root, new LevelEntry { Island = "Test", Name = "Cloud" }, null);
+            var prepared = new TrackPreflight(track, cloud);
+            Check(prepared.DeckCards.Count == 2 && prepared.DeckCards[0].Steps.Count == 2, "Empty inherited row must be available to the panel before mapping");
+            Check(prepared.Inspect().CanStart && Has(prepared.Inspect(), "support-inherited", "info"), "Resolved support must validate and explain its origin");
+            Check(track.Opening.Cards[0].Steps.Count == 0, "Preview must not mutate the source track");
+            var water = CarrierMap.Find(root, new LevelEntry { Island = "Test", Name = "Water" }, null);
+            Check(!new TrackPreflight(track, water).Inspect().CanStart, "Changing stages must recompute support even for the same track");
+            var fallback = new TrackPreflight(TrackFile.Parse("木盘子\t7[1]"), water);
+            Check(fallback.DeckCards.Count == 1 && fallback.Inspect().CanStart, "Fixed-cell legacy fallback must remain mappable");
+            var explicitTrack = TrackFile.Parse("麦芽糖\t7[1]继\t000|11\t000|21");
+            var explicitPlan = new TrackPreflight(explicitTrack, cloud);
+            Check(explicitPlan.Inspect().CanStart && Has(explicitPlan.Inspect(), "support-inherited", "info"),
+                "An explicit support formation must import default timing and validate");
+            Check(explicitPlan.DeckCards[0].Steps[0].Cell.Equals(new Cell(1, 1)) &&
+                  explicitPlan.DeckCards[0].Steps[1].Cell.Equals(new Cell(2, 1)) &&
+                  explicitPlan.DeckCards[0].Steps[0].TimeDeciseconds == 100 &&
+                  explicitPlan.DeckCards[0].Steps[1].TimeDeciseconds == 200,
+                "Inherited times must follow explicit cells by index");
+            Check(Has(new TrackPreflight(explicitTrack, null).Inspect(), "missing-inheritance"),
+                "An explicit 继 formation needs a matching default support layout");
+            Check(Has(new TrackPreflight(TrackFile.Parse("麦芽糖\t7[1]继\t000|11"), cloud).Inspect(),
+                "invalid-inherited-cell"), "Default timing cannot create a clickable 00 on a non-fill row");
+        }
+
+        private static void InvalidSupportData()
+        {
+            var folder = Path.Combine(_scratch, "bad-support", "承载轨道", "1Test");
+            Directory.CreateDirectory(folder);
+            foreach (var steps in new[] { "000.5|12", "010|00", "9999|12" })
+            {
+                File.WriteAllText(Path.Combine(folder, "1Cloud.txt"), "棉花糖\t7[1]独\t" + steps);
+                bool failed = false;
+                try { CarrierMap.Find(Path.Combine(_scratch, "bad-support"), new LevelEntry { Island = "Test", Name = "Cloud" }, null); }
+                catch (FormatException) { failed = true; }
+                Check(failed, "Invalid inherited input must be rejected before it loses its diagnostics");
+            }
+        }
+
+        private static void StartPreflight()
+        {
+            var root = Path.Combine(_scratch, "controller");
+            Directory.CreateDirectory(Path.Combine(root, "预制轨道"));
+            File.WriteAllText(Path.Combine(root, "预制轨道", "Test.txt"), "Card\t7[3]补极,0,0,200,1\t000|11");
+            var controller = new GrindController(null, null, AssistantOptions.Parse(new[] { "--track-dir", root }));
+            bool rejected = false;
+            try
+            {
+                controller.StartAsync(new GrindRequest { Track = "Test.txt", Cards = new List<(string, string)> { ("Card", "Mine") } }).GetAwaiter().GetResult();
+            }
+            catch (InvalidOperationException error) { rejected = error.Message.Contains("conditions-unsupported"); }
+            Check(rejected && !controller.Running && controller.Current == null, "Incompatible requests must stop before accessing null browser/card dependencies");
+        }
+
+        private static void PreflightSnapshot()
+        {
+            var path = Path.Combine(_scratch, "snapshot.txt");
+            File.WriteAllText(path, "Card\t7[3]补极\t000|11");
+            var snapshot = TrackFile.Load(path);
+            Check(new TrackPreflight(snapshot, null).Inspect().CanStart, "Initial snapshot must be valid");
+            File.WriteAllText(path, "Card\t7[3]补极\t000|00");
+            var settings = new GrindSettings { TrackPath = path, Track = snapshot, SlotCount = 1,
+                SlotOfCard = new Dictionary<string, int> { ["Card"] = 1 } };
+            var loop = new GrindLoop(null, null, settings, Path.Combine(_scratch, "snapshot-run"));
+            Check(ReferenceEquals(Get(loop, "_track"), snapshot), "Execution must use the checked snapshot rather than reread changed input");
+            settings.Track = TrackFile.Load(path);
+            var rejectedDir = Path.Combine(_scratch, "must-not-exist");
+            bool rejected = false;
+            try { new GrindLoop(null, null, settings, rejectedDir); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && !Directory.Exists(rejectedDir), "Invalid geometry must fail before a run directory is created");
+        }
+        private static void GeneratedCompatibility()
+        {
+            var battle = new RecordedBattle { Character = new Cell(2, 3) };
+            var card = new RecordedCard { Name = "TestCard", Slot = 1 };
+            card.Cells.Add(new Cell(1, 2));
+            battle.Cards.Add(card);
+            battle.Shovel.Add(new TrackStep(12, new Cell(1, 2)));
+            battle.Shovel.Add(TrackStep.AtDeciseconds(125, new Cell(1, 2)));
+            var exported = battle.ToTrackText("Synthetic recording");
+            Check(exported.Contains("\t012|12\t012.5|12"), "Recorded shovel times must keep whole and fractional values");
+            var track = TrackFile.Parse(exported);
+            Check(track.Opening.Cards.Single(c => c.IsShovel).Independent, "Recorded clicks use elapsed battle time");
+            Check(new TrackPreflight(track, null).Inspect(null, true).CanStart, "Generated formation and shovel must be accepted together");
+        }
+
+        private static void DuoGates()
+        {
+            var session = new DuoSession(DuoRole.Host);
+            Check(!session.RoomReleased(1) && !session.BattleReleased(1), "A new duo run must wait for both gates");
+            bool rejected = false;
+            try { session.ReleaseRoom("stale", 1, 1, "duo-room-ready"); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && !session.RoomReleased(1), "A stale run ID must not release a room");
+            rejected = false;
+            try { session.ReleaseRoom(session.RunId, 2, 1, "duo-room-ready"); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && !session.RoomReleased(2), "A future round must not release a room");
+            session.ReleaseRoom(session.RunId, 1, 1, "duo-room-ready");
+            Check(session.RoomReleased(1) && !session.RoomReleased(2), "Only the current room round may advance");
+            rejected = false;
+            try { session.ReleaseBattle(session.RunId, 1, 1, "duo-awaiting-battle"); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && !session.BattleReleased(1), "Battle cannot start before both opening frames are ready");
+            session.ReleaseBattle(session.RunId, 1, 1, "duo-battle-ready");
+            Check(session.BattleReleased(1), "The matching battle gate should release");
+            var guest = new DuoSession(DuoRole.Guest, 2345);
+            rejected = false;
+            try { guest.SetRoomNumber(6789); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && guest.RoomNumber == 0, "The guest must reject a different room ID");
+            guest.SetRoomNumber(2345);
+            Check(guest.RoomNumber == 2345, "The joined room ID should be retained for the run");
+        }
+
+        private static void RoomNumbers()
+        {
+            var root = Path.Combine(_scratch, "room-digits");
+            void WriteMasks(string name, int width)
+            {
+                var folder = Path.Combine(root, "附加程序", "数字", name);
+                Directory.CreateDirectory(folder);
+                for (int digit = 0; digit < 10; digit++)
+                    using (var bmp = new Bitmap(width, 8))
+                    {
+                        for (int y = 0; y < 8; y++)
+                            for (int x = 0; x < width; x++)
+                                bmp.SetPixel(x, y, MaskPixel(digit, width, x, y) ? Color.White : Color.Black);
+                        bmp.Save(Path.Combine(folder, digit + ".png"));
+                    }
+            }
+            WriteMasks("房间内房间号", 6);
+            WriteMasks("列表房间号", 5);
+            var reader = RoomNumberReader.Load(root);
+            Check(reader != null, "Complete local digit sets should load");
+            using (var bitmap = new Bitmap(950, 600))
+            {
+                using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.FromArgb(20, 20, 20));
+                void PaintNumber(string value, int width, int pitch, int left, int top, Color color)
+                {
+                    for (int i = 0; i < value.Length; i++)
+                        for (int y = 0; y < 8; y++)
+                            for (int x = 0; x < width; x++)
+                                if (MaskPixel(value[i] - '0', width, x, y))
+                                    bitmap.SetPixel(left + i * pitch + x, top + y, color);
+                }
+                PaintNumber("2345", 6, 7, 164 - 12, 28, Color.White);
+                PaintNumber("2345", 5, 6, 150 + 20 - 12, 200, Color.FromArgb(198, 255, 248));
+                var frame = StageFrame.FromBitmap(bitmap, new Rectangle(0, 0, 950, 600));
+                Check(reader.ReadRoom(frame) == 2345, "The room header should yield the four-digit ID");
+                Check(reader.FindListRoom(frame, 2345, 20) == new Point(158, 204),
+                    "The shifted room list should yield the intended click point");
+                Check(reader.FindListRoom(frame, 9999, 20) == null, "An absent room must never be selected");
+                using (var blank = new Bitmap(950, 600))
+                {
+                    using (var graphics = Graphics.FromImage(blank)) graphics.Clear(Color.Black);
+                    Check(reader.ReadRoom(StageFrame.FromBitmap(blank, new Rectangle(0, 0, 950, 600))) == null,
+                        "An unreadable room number must stay unknown");
+                }
+            }
+        }
+
+        private static bool MaskPixel(int digit, int width, int x, int y)
+        {
+            if (x == width - 1) return true;
+            for (int bit = 0; bit < 4; bit++)
+                if ((digit & (1 << bit)) != 0 && x >= (bit % 2) * 2 && x < (bit % 2) * 2 + 2 &&
+                    y >= (bit / 2) * 4 && y < (bit / 2) * 4 + 2)
+                    return true;
+            return false;
+        }
+
+        private static void DuoPlans()
+        {
+            DuoTrackPlan Plan(string player, string cardCell, int layer = 3) =>
+                DuoTrackPlan.Build(new TrackPreflight(TrackFile.Parse(
+                    "人物1位置=" + player + "\nCard\t7[" + layer + "]补极\t000|" + cardCell), null),
+                    new[] { "Card" }, false);
+            var host = Plan("11", "12");
+            var guest = Plan("21", "22");
+            DuoTrackPlan.RequireDisjoint(host, guest);
+            var timed = DuoTrackPlan.Build(new TrackPreflight(
+                TrackFile.Parse("人物1位置=11\nCard\t7[3]补独\t010|12\t020|00"), null),
+                new[] { "Card" }, false);
+            Check(timed.Cells.Count == 1 && timed.Cells[0].Equals(new Cell(1, 2)),
+                "A timed 00 marker must not become a shared duo board cell");
+            bool rejected = false;
+            try { DuoTrackPlan.RequireDisjoint(host, Plan("21", "12")); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "Shared card cells must stop a duo plan");
+            rejected = false;
+            try { DuoTrackPlan.RequireDisjoint(host, Plan("11", "22")); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "Characters must not share a cell");
+            rejected = false;
+            try { DuoTrackPlan.RequireDisjoint(host, Plan("12", "22")); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "A card must not target the other account's character");
+            rejected = false;
+            try { Plan("21", "22", 1); }
+            catch (NotSupportedException) { rejected = true; }
+            Check(rejected, "Support-card cooperation must remain unavailable in the first duo mode");
+            rejected = false;
+            try { DuoTrackPlan.Build(new TrackPreflight(TrackFile.Parse("Card\t7[3]补极\t000|12"), null), new[] { "Card" }, false); }
+            catch (NotSupportedException) { rejected = true; }
+            Check(rejected, "An account must have an explicit own-character cell");
+        }
+
+        private static void CarrierDefaults()
+        {
+            var folder = Path.Combine(_scratch, "承载轨道", "1Test");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "1Cloud.txt"), "棉花糖\t7[1]独\t010|12\t020|22");
+            var map = CarrierMap.Find(_scratch, new LevelEntry { Island = "Test", Name = "Cloud" }, null);
+            Check(map != null && map.Clouds && map.Cells.Count == 0, "Timed-only support must survive lookup without becoming fixed support");
+            var empty = Card("麦芽糖\t7[1]继绝");
+            var inherited = map.Resolve(empty);
+            Check(inherited.Name == "麦芽糖" && inherited.Steps.Count == 2 && inherited.Independent && inherited.Absolute, "Cloud alias must inherit default timing");
+            Check(empty.Steps.Count == 0, "Resolving defaults must not mutate the loaded track");
+            var explicitCard = Card("麦芽糖\t7[1]独继\t025|32\t035|42");
+            var explicitResolved = map.Resolve(explicitCard);
+            Check(!ReferenceEquals(explicitCard, explicitResolved) && explicitResolved.Independent &&
+                  explicitResolved.Steps[0].Cell.Equals(new Cell(3, 2)) &&
+                  explicitResolved.Steps[1].Cell.Equals(new Cell(4, 2)) &&
+                  explicitResolved.Steps[0].TimeDeciseconds == 100 &&
+                  explicitResolved.Steps[1].TimeDeciseconds == 200,
+                "Explicit support cells retain their locations and inherit timing");
+            Check(explicitCard.Steps[0].TimeDeciseconds == 250,
+                "Resolving explicit inheritance must not mutate the source track");
+            var disabled = Card("麦芽糖\t7[1]");
+            Check(ReferenceEquals(disabled, map.Resolve(disabled)), "Timed defaults need opening inherit opt-in");
+            Check(!map.Matches(Card("木盘子\t7[1]")), "A water carrier must not fill cloud defaults");
+            File.WriteAllText(Path.Combine(folder, "2Water.txt"), "木盘子\t7[1]\t000|13\t000|23");
+            var water = CarrierMap.Find(_scratch, new LevelEntry { Island = "Test", Name = "Water" }, null);
+            var fixedCard = water.Resolve(Card("木盘子\t7[1]继"));
+            Check(water.Cells.Count == 2 && fixedCard.Fill && fixedCard.Extreme, "Fixed support must replenish");
+        }
+
+        private static void TimedRetries()
+        {
+            var now = DateTime.UtcNow;
+            var schedule = new PlacementSchedule(Card("Support\t7[1]独\t010|12\t020|22").Steps);
+            Check(schedule.Next(9, now, false) == null, "Must not place early");
+            schedule.Attempt(0, now);
+            schedule.Retry(0, now);
+            Check(schedule.Next(19, now.AddMilliseconds(499), false) == null, "Rapid retry must wait");
+            Check(schedule.Next(19, now.AddMilliseconds(500), false) == 0, "A late first attempt must get a full retry window");
+            schedule.Retry(0, now.AddSeconds(7));
+            Check(schedule.Next(19, now.AddSeconds(8), false) == null, "Old failures need slower retries");
+            Check(schedule.Next(21, now.AddSeconds(8), false) == 1, "Old failure must not block a newly due event");
+            schedule.Attempt(1, now.AddSeconds(8));
+            schedule.Complete(1);
+            Check(schedule.Next(25, now.AddSeconds(12), false) == 0, "Old failure must remain repairable");
+            schedule.Complete(0);
+            Check(schedule.Done, "All events should complete");
+        }
+
+        private static void LateSchedule()
+        {
+            var now = DateTime.UtcNow;
+            var schedule = new PlacementSchedule(Card("Support\t7[1]独\t010|12\t020|22\t030|12").Steps);
+            schedule.Attempt(0, now); schedule.Complete(0);
+            schedule.Attempt(1, now); schedule.Complete(1);
+            schedule.Retry(1, now);
+            Check(schedule.Next(25, now.AddSeconds(1), false) == 1, "Late rejection should restore only the rejected event");
+            schedule.Complete(1);
+            Check(schedule.Next(25, now.AddSeconds(2), false) == null, "Completed steps must not replay");
+            schedule.Retry(0, now);
+            schedule.Complete(2, true);
+            Check(schedule.Done, "A later repair of the same cell supersedes the older failed repair");
+        }
+
+        private static StageFrame Frame(Color background, Action<Bitmap> paint = null)
+        {
+            using (var bitmap = new Bitmap(950, 600, PixelFormat.Format32bppArgb))
+            {
+                using (var g = Graphics.FromImage(bitmap)) g.Clear(background);
+                paint?.Invoke(bitmap);
+                return StageFrame.FromBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+            }
+        }
+
+        private static BattleRunner Runner(string trackText, StageFrame opening, FakeIo io = null)
+        {
+            var track = TrackFile.Parse(trackText);
+            var slots = track.Opening.DeckCards.Select((c, i) => new { c.Name, Slot = i + 1 }).ToDictionary(c => c.Name, c => c.Slot);
+            var runner = new BattleRunner(io, io == null ? null : Detector(), new BattleLayout(slots.Count), track, slots, false, false, null, _ => { });
+            Set(runner, "_openingField", opening);
+            Set(runner, "_start", DateTime.UtcNow.AddSeconds(-40));
+            return runner;
+        }
+
+        private static object Own(BattleRunner runner, Cell cell, StageFrame before, StageFrame after, DateTime at)
+        {
+            var own = Activator.CreateInstance(typeof(BattleRunner).GetNestedType("OwnCard", BindingFlags.NonPublic), true);
+            Set(own, "Before", before.Crop(Layout.CellInterior(cell)));
+            Set(own, "After", after.Crop(Layout.CellInterior(cell)));
+            Set(own, "PlacedAt", at);
+            ((IDictionary)Get(Plan(runner), "Own"))[cell] = own;
+            return own;
+        }
+
+        private static List<Cell> Targets(BattleRunner runner, StageFrame frame, DateTime at) =>
+            (List<Cell>)Call(runner, "FormationTargets", Plan(runner), frame, at, null);
+
+        private static void LastEmptyCell()
+        {
+            var now = DateTime.UtcNow;
+            var opening = Frame(Color.Black);
+            var frame = Frame(Color.Navy, b =>
+            {
+                using (var g = Graphics.FromImage(b))
+                    for (int row = 1; row <= 6; row++) g.FillRectangle(Brushes.Red, Layout.CellInterior(new Cell(row, 3)));
+            });
+            var runner = Runner("Card\t7[3]补极\t000|13\t000|23\t000|33\t000|43\t000|53\t000|63\t000|73", opening);
+            ((int[])Get(runner, "_movingSightings"))[3] = 3;
+            for (int row = 1; row <= 6; row++) Own(runner, new Cell(row, 3), opening, frame, now.AddSeconds(-20));
+            Check(Targets(runner, frame, now).Single().Equals(new Cell(7, 3)), "Must reach the last unowned cell without an empty neighbor");
+            Check(Targets(runner, frame, now.AddSeconds(11)).Count == 0, "Must back off after a probe");
+            Check(Targets(runner, frame, now.AddSeconds(31)).Single().Equals(new Cell(7, 3)), "A failed probe must not permanently exclude the last cell");
+        }
+
+        private static void ProbeFairness()
+        {
+            var now = DateTime.UtcNow;
+            var runner = Runner("Card\t7[3]补极\t000|12\t000|22", Frame(Color.Black));
+            var unknown = Frame(Color.Blue);
+            Check(Targets(runner, unknown, now)[0].Equals(new Cell(1, 2)), "First probe order");
+            Check(Targets(runner, unknown, now.AddSeconds(11))[0].Equals(new Cell(2, 2)), "Untried cells should get a turn");
+            Check(Targets(runner, unknown, now.AddSeconds(42))[0].Equals(new Cell(1, 2)), "Least recently tried cell should be revisited first");
+        }
+
+        private static void PaintCard(Bitmap bitmap, Rectangle region)
+        {
+            for (int y = region.Top; y < region.Bottom; y++)
+                for (int x = region.Left; x < region.Right; x++)
+                    bitmap.SetPixel(x, y, Color.FromArgb(240, 16 + (x - region.Left) % 24 * 8, 16));
+        }
+
+        private static CardSignature Signature()
+        {
+            var background = Frame(Color.Black).Crop(Layout.HeldCardRegion);
+            var held = Frame(Color.Black, b => PaintCard(b, Layout.HeldCardRegion)).Crop(Layout.HeldCardRegion);
+            Check(CardSignature.Learn(background, background, background, background) == null, "Unchanged capture must not learn a card");
+            return CardSignature.Learn(background, background, held, held);
+        }
+
+        private static void Presence()
+        {
+            var now = DateTime.UtcNow;
+            var cell = new Cell(4, 4);
+            var opening = Frame(Color.Black);
+            var visible = Frame(Color.Navy, b => PaintCard(b, Layout.CardRegion(cell)));
+            var absent = Frame(Color.DarkCyan);
+            var runner = Runner("Card\t7[3]补极\t000|44", opening);
+            Set(Plan(runner), "Signature", Signature());
+            var own = Own(runner, cell, opening, visible, now.AddSeconds(-20));
+            Check((bool)Call(runner, "Present", Plan(runner), cell, visible, now), "Card should be visible against a changed background");
+            Check((bool)Get(own, "SignatureSeen"), "Signature must first be validated on the board");
+            Check((bool)Call(runner, "Present", Plan(runner), cell, absent, now.AddSeconds(1)), "One occluded sample must not remove the card");
+            Check((bool)Call(runner, "Present", Plan(runner), cell, visible, now.AddSeconds(1.5)), "Visible card must reset absence evidence");
+            foreach (var offset in new[] { 2.0, 2.5 })
+                Check((bool)Call(runner, "Present", Plan(runner), cell, absent, now.AddSeconds(offset)), "Wait for multiple absence samples");
+            Check(!(bool)Call(runner, "Present", Plan(runner), cell, absent, now.AddSeconds(3)), "Persistent loss must clear ownership without an empty neighbor");
+        }
+
+        private static void RefreshOwnership()
+        {
+            var now = DateTime.UtcNow;
+            var opening = Frame(Color.Black);
+            var visible = Frame(Color.Navy, b =>
+            {
+                for (int row = 1; row <= 7; row++) PaintCard(b, Layout.CardRegion(new Cell(row, 4)));
+            });
+            var runner = Runner("Card\t7[3]补极\t000|14\t000|24\t000|34\t000|44\t000|54\t000|64\t000|74", opening);
+            Set(Plan(runner), "Signature", Signature());
+            for (int row = 1; row <= 7; row++) Own(runner, new Cell(row, 4), opening, visible, now.AddSeconds(-20));
+            Call(runner, "RefreshBoard", visible, now);
+            var gone = Frame(Color.DarkCyan, b =>
+            {
+                for (int row = 1; row <= 7; row++)
+                    if (row != 4) PaintCard(b, Layout.CardRegion(new Cell(row, 4)));
+            });
+            foreach (var offset in new[] { 1.0, 1.5, 2.0 }) Call(runner, "RefreshBoard", gone, now.AddSeconds(offset));
+            var owned = (IDictionary)Get(Plan(runner), "Own");
+            Check(owned.Count == 6 && !owned.Contains(new Cell(4, 4)), "A hole surrounded by the same card must be detected without losing adjacent cards");
+        }
+
+        private static void UnverifiedOwnership()
+        {
+            var now = DateTime.UtcNow;
+            var opening = Frame(Color.Black);
+            var ambiguous = Frame(Color.Navy);
+            var runner = Runner("Card\t7[3]补极\t000|44", opening);
+            Set(runner, "_cardsFall", true);
+            Own(runner, new Cell(4, 4), opening, ambiguous, now.AddSeconds(-44));
+            Check((bool)Call(runner, "Present", Plan(runner), new Cell(4, 4), ambiguous, now), "Unverified occupancy must retain its grace period");
+            foreach (var offset in new[] { 1.0, 1.5, 2.0 }) Call(runner, "Present", Plan(runner), new Cell(4, 4), ambiguous, now.AddSeconds(offset));
+            Check(((IDictionary)Get(Plan(runner), "Own")).Count == 0, "Unverified occupancy should expire into an uncertain cell");
+        }
+
+        private static void HeldSignatureLearning()
+        {
+            var io = new FakeIo { RenderCard = true };
+            var runner = Runner("Card\t7[3]补极\t000|12", io.Grab(), io);
+            var plan = Plan(runner);
+            Check(((Task<bool>)Call(runner, "PlaceAsync", plan, io.Grab(), CancellationToken.None, null)).GetAwaiter().GetResult(), "Ordinary card should place");
+            var signature = (CardSignature)Get(plan, "Signature");
+            Check(signature != null && signature.Score(io.Grab(), Layout.CardRegion(new Cell(1, 2))) >= 0.3,
+                "Held-card learning must produce usable on-board evidence");
+        }
+
+        private static ScreenDetector Detector()
+        {
+            var path = Path.Combine(_scratch, "templates");
+            Directory.CreateDirectory(path);
+            var rules = (IEnumerable)typeof(ScreenDetector).GetField("Rules", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            var names = new HashSet<string>(new[] { "房间_2P等待中", "房间_2P已关闭" });
+            foreach (var rule in rules)
+                foreach (var name in (string[])rule.GetType().GetField("Item2").GetValue(rule)) names.Add(name);
+            foreach (var name in names)
+                using (var b = new Bitmap(1, 1))
+                {
+                    b.SetPixel(0, 0, Color.White);
+                    b.Save(Path.Combine(path, (name == "退出按钮" ? "(10,10)" : "(0,0)") + name + ".png"));
+                }
+            var library = new TemplateLibrary();
+            library.LoadDirectory(path);
+            return new ScreenDetector(library);
+        }
+
+        private static void PlacementRollback()
+        {
+            var io = new FakeIo();
+            var detector = Detector();
+            Check(detector.Detect(io.Grab()) == GameScreen.Battle,
+                "Synthetic detector expected Battle, got " + detector.Detect(io.Grab()) + "; loot diff " + detector.Diff("战利品", io.Grab()));
+            var runner = Runner("Support\t7[1]独\t010|12", io.Grab(), io);
+            var plan = Plan(runner);
+            Check(((Task<bool>)Call(runner, "PlaceAsync", plan, io.Grab(), CancellationToken.None, null)).GetAwaiter().GetResult(), "Fake slot cooldown should confirm placement");
+            Check(((PlacementSchedule)Get(plan, "Schedule")).Done && runner.Placements == 1, "Successful timed placement should complete once");
+            // Ownership can disappear before the late-refusal signal; the event ledger must still recover.
+            ((IDictionary)Get(plan, "Own")).Clear();
+            Call(runner, "ForgetLatePlacement", 1);
+            Check(!((PlacementSchedule)Get(plan, "Schedule")).Done && runner.Placements == 0, "Late rejection must restore a consumed event even after ownership was cleared");
+            Call(runner, "ForgetLatePlacement", 1);
+            Check(runner.Placements == 0, "Repeated rollback must not decrement twice");
+        }
+
+        private static void RefusedSupport()
+        {
+            var io = new FakeIo { Reject = true };
+            var runner = Runner("Support\t7[1]独\t001|12", io.Grab(), io);
+            Check(!((Task<bool>)Call(runner, "PlaceAsync", Plan(runner), io.Grab(), CancellationToken.None, null)).GetAwaiter().GetResult(), "Held card should be recognized as refused");
+            Check(!((PlacementSchedule)Get(Plan(runner), "Schedule")).Done, "A refused late support must remain pending");
+        }
+
+        private static void SupportDependency()
+        {
+            var now = DateTime.UtcNow;
+            var opening = Frame(Color.Black);
+            var runner = Runner("棉花糖\t7[1]独\t010|12\t020|12\nCard\t7[3]独\t011|12", opening);
+            var plans = (IList)Get(runner, "_plans");
+            Set(runner, "_start", now);
+            Call(runner, "RefreshBoard", opening, now.AddSeconds(9));
+            Check(!((HashSet<Cell>)Get(runner, "_carrierCells")).Contains(new Cell(1, 2)), "Future cloud event must not block a solid cell at startup");
+            Call(runner, "RefreshBoard", opening, now.AddSeconds(10));
+            Check(((HashSet<Cell>)Get(runner, "_carrierCells")).Contains(new Cell(1, 2)), "Due cloud event must activate support dependency");
+            Set(runner, "_start", now.AddSeconds(-15));
+            Check(!((Task<bool>)Call(runner, "PlaceAsync", plans[1], opening, CancellationToken.None, null)).GetAwaiter().GetResult(), "Timed ordinary card must wait without using IO on an unsupported cloud");
+        }
+
+        private sealed class FakeIo : IGameIo
+        {
+            private int _state; // 0 ready, 1 held, 2 cooling
+            public bool Reject;
+            public bool RenderCard;
+            public readonly List<Cell> CellClicks = new List<Cell>();
+            public DateTime LastPageLoadUtc => DateTime.MinValue;
+            public StageFrame Grab() => Frame(Color.Black, b =>
+            {
+                b.SetPixel(10, 10, Color.White);
+                if (RenderCard && _state == 1) PaintCard(b, Layout.HeldCardRegion);
+                if (RenderCard && _state == 2) PaintCard(b, Layout.CardRegion(new Cell(1, 2)));
+                if (_state == 0)
+                    using (var g = Graphics.FromImage(b)) g.FillRectangle(Brushes.White, Layout.SlotLabel(1));
+            });
+            public Task ClickAsync(Point at, MouseButtonType button = MouseButtonType.Left)
+            {
+                var cell = BattleLayout.CellAt(at);
+                if (cell.HasValue) CellClicks.Add(cell.Value);
+                if (at == Layout.SlotCenter(1)) { if (_state == 0) _state = 1; else if (_state == 1) _state = 0; }
+                else if (_state == 1 && !Reject && cell.HasValue) _state = 2;
+                return Task.CompletedTask;
+            }
+            public void Move(Point at) { }
+            public Task TypeAsync(string text) => Task.CompletedTask;
+            public void Reload() { }
+            public void Repaint() { }
+        }
+    }
+}

@@ -1,0 +1,7 @@
+* text=auto
+Makefile text eol=lf
+.githooks/* text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.swf binary
+*.zip binary

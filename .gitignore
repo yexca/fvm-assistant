@@ -1,0 +1,40 @@
+# Build and IDE output
+[Bb]in/
+[Oo]bj/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local third-party material (including the Flash plugin and installers)
+vendor/
+sample/
+
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+*.kdbx
+*credentials*.json
+*secrets*.json
+
+# Runtime data, if copied into this checkout
+profiles/
+captures/
+recordings/
+logs/
+cards/
+panel.json
+cef.log
+*.log
+*.har
+*.sqlite
+*.sqlite3
+
+# Local tooling
+.pytest_cache/
+__pycache__/

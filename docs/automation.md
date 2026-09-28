@@ -1,0 +1,266 @@
+# Automation behavior and operating notes
+
+The game-control loop lives in `src/FvmAssistant/Automation/` and runs only in FvmAssistant's off-screen mode. It recognizes screen states from image templates and sends CEF mouse events without taking over the real pointer. The window may be minimized during a run.
+
+## Single-account round flow
+
+```text
+美味镇 → world map → island → stage → room list → create a room
+room → close the 2P slot → clear and build the deck → start
+battle → place the character → place cards from the track → collect drops
+victory → collect rewards, or continue into the optional boss stage
+loot → settlement → free chest flip → room → next round
+final room → leave room → world map → 美味镇
+```
+
+The loop closes recognized health/activity popups. If a screen remains unrecognized for 45 seconds, it refreshes; it also refreshes after 30 seconds at `加载中 100%` or immediately on a disconnect. A failed round is abandoned and navigation restarts from 美味镇. Each round allows at most six refreshes. A newly loaded page resets the wait clock so two refresh mechanisms do not interrupt one another. Unhandled situations stop with a screenshot rather than blind clicking.
+
+On 2026-09-25, three consecutive 曲奇岛 normal-stage rounds succeeded from 美味镇, each taking about 2 minutes 45 seconds. This is a manual observation, not an automated regression test. When a target stage is specified but the application starts inside a room, it first leaves the room because it cannot verify that room's stage.
+
+## Operation panel
+
+1. Log in and enter the game manually. Stop at 美味镇 or in a stage room.
+2. Select a stage from `普通关卡.txt`, or select the already-in-room option. Selecting a stage filters the available preset tracks; an arbitrary track can also be chosen by file picker. The formation/timeline preview shows all track waves on a 7×9 board, with skipped cards in gray and `00` events in the timeline. The adjacent step editor can edit a copy of the selected track; see [editing a track copy](#editing-a-track-copy).
+3. Map each track card to a learned card icon from the account. Select “do not bring” to skip a card. To learn a new icon, place the card in a room deck and use the panel's learn-current-deck action.
+   The card list includes support cards resolved from the selected stage's defaults. The compatibility report updates when the stage, track, mapping, or shovel option changes; errors disable Start.
+4. Choose a round count and, if needed, boss continuation, shovel steps, and the account's automatic flame-pickup setting. Start the loop. The game view ignores manual mouse and keyboard input while automation is active; Stop ends it.
+5. Use the recorder to capture a manually played round for debugging or track generation. It records mouse actions and frames, not keyboard input.
+
+The red crosshair is the automation pointer shown only in the UI. During automation or recording, the page keeps its starting size; resizing the window can crop or add blank space but does not shift stage coordinates. For the `main` profile, panel settings are in `%LOCALAPPDATA%\FvmAssistant\panel.json`; learned icons are in `cards\` and run logs/captures are in `captures\grind-*`. Treat all of these as private.
+
+The game can center the stage at a half pixel when page width is odd. Stage positioning rounds that edge upward to match Chromium. Older recordings can be corrected by one pixel during track conversion. If a battle frame stops changing for five seconds, the application asks the browser to redraw; after 20 seconds without placing a card it logs card-slot diagnostics.
+
+Other profiles store their panel settings, learned cards, captures, and logs under `%LOCALAPPDATA%/FvmAssistant/accounts/<profile>/`. Browser cookies and Flash storage remain under `profiles/<profile>/`. A second process cannot open the same profile at the same time.
+
+## Local control API
+
+The API is loopback-only and intended for local scripts. Examples (run from the repository root):
+
+```powershell
+.\scripts\assistant.ps1 '/cards?learn=日光炉,,,,红柳烤串机'
+.\scripts\assistant.ps1 '/grind?state=start&rounds=3&level=美味/曲奇&track=通用轨道/6美味/1曲奇.txt&cards=小火炉:日光炉,海星:红柳烤串机'
+.\scripts\assistant.ps1 /grind
+.\scripts\assistant.ps1 '/grind?state=stop'
+```
+
+`level` is `island/stage` from `普通关卡.txt`; omit it only when already in a suitable room. `track` is relative to `vendor\track\预制轨道` or an absolute path. `cards` maps `track card:learned card` in deck order; unmapped track cards are skipped. `shovel=1` enables shovel steps, `boss=1` requests boss continuation, and `autoflame=1` changes collection sweeps for an account that automatically picks up flames. Never put login/session tokens in these URLs or logs.
+
+## Two-account rooms
+
+This mode uses two off-screen processes on the **same server**, with different
+profiles, ports, and learned card libraries. The supported live workflow is to
+pair both accounts in a room manually and then run `scripts/duo.ps1` without
+`-Level`. Follow the [manual two-account guide](two-account.md) for separate
+process startup, a tested 曲奇 support track, the coordinator command, and
+progress/stop commands. Confirm the host and close invitation or other overlays
+before starting. The room screen does not expose its stage reliably, so the user
+must verify the stage in manual mode.
+
+With `-Level`, the coordinator attempts to create and join a room automatically
+from a navigable map. This path is **not yet usable in the tested live setup**:
+room-number recognition failed after the host created the room. The command
+below describes the implemented interface for further testing, not a recommended
+unattended run. Automatic mode rejects an existing room or room list because it
+cannot verify that stage:
+
+```powershell
+.\scripts\duo.ps1 -HostPort 18765 -GuestPort 18766 -Level '美味/曲奇' `
+    -HostTrack '我的轨道\host.txt' -GuestTrack '我的轨道\guest.txt' `
+    -HostCards '小火炉:日光炉' -GuestCards '海星:红柳烤串机' -Rounds 3
+```
+
+The coordinator checks both tracks before touching the browsers. With `-Level`, it generates a four-digit temporary password, has the host create the selected stage's room, reads the room number, and has the guest locate that number in the visible room list and join. Both clients recheck the room number on later rounds, including the final return to the room. The script keeps the temporary password out of its normal output; it travels through the local control API and may still be visible in local diagnostics. Do not share run logs or captures without review.
+
+Both tracks must specify a single `人物1位置` for their **own** account. The current version accepts only ordinary layer-3 cards, disjoint card cells, and distinct character cells. It rejects shovel actions, support-card dependencies, and boss continuation. Select a stage whose board needs no support cards. Both profiles need their own learned card icons matching the supplied mappings. Automatic joining searches only the currently visible room list and times out after 60 seconds if the host room is absent; page turning and list refresh are not implemented.
+
+For each round the coordinator waits until both decks are ready, asks the guest to prepare, then asks the host to start. Each browser places its character and captures its opening board before either track begins card placement. Both accounts run their own track and reward flow; the next round starts only after both return to the room. A lost room, disconnect, unrecognized screen, failed battle, or missing coordinator heartbeat stops the affected account, and the script stops its partner. Duo completion is counted separately for each account. The final round leaves both accounts in the room.
+
+`/duo` reports each account's state and, in automatic mode, its recognized room
+number; the number remains `0` in manual mode. `/duo?state=plan&track=...&cards=...&level=...`
+checks one track without accessing the browser. The coordinator sends
+round-specific `room` and `battle` releases with run IDs; use `scripts/duo.ps1`
+to manage these gates. `scripts/assistant.ps1 -Port 18766 /duo` reads the second
+account's state, and `/duo?state=stop` stops its run. The host's empty/open 2P
+seat is detected, but the occupied seat does not yet have a positive template.
+Room-number matching adds an automatic check in `-Level` mode but does not prove
+the guest occupied the seat; verify each manual pairing before starting.
+
+This implementation has deterministic gate, track-plan, and room-number recognition regression coverage. On 2026-09-28, manually paired 曲奇 accounts completed one coordinated round and then two consecutive rounds. Both accounts reached Victory, collected the free treasure card, and returned to the shared room after each round; the partner placed only 小火炉. Automatic pairing stopped before guest joining because the live room-number font was not recognized by the installed masks. Automatic room password entry and guest joining therefore remain unverified, and the occupied-seat display still has no positive template. Keep automatic pairing attended until these paths pass a live test.
+
+## Single-account task queues
+
+`scripts/queue.ps1` runs a sequence of ordinary stage grinds on one already logged-in off-screen profile. Save a plan outside the repository, for example `my-queue.json`:
+
+```json
+{
+  "tasks": [
+    { "level": "美味/曲奇", "track": "我的轨道/曲奇.txt", "cards": "小火炉:日光炉", "rounds": 3 },
+    { "level": "美味/色拉", "track": "我的轨道/色拉.txt", "cards": "海星:红柳烤串机", "rounds": 2 }
+  ]
+}
+```
+
+Run `.\scripts\queue.ps1 -Plan .\my-queue.json -DryRun` to check every track without starting a game run; omit `-DryRun` to execute. Add `-Port 18766` for another profile. Each task may also set `shovel`, `boss`, or `autoflame` to `true`. The queue requires a stage on every task, uses that account's learned card icons, and starts the next task only after the previous one reports all requested rounds finished. A failed, stopped, replaced, or timed-out run stops the queue. This first coordinator does not automatically retry or skip a failed stage because the current game screen may not be a safe navigation boundary. Keep the plan and run diagnostics private if they identify an account.
+
+## Track compatibility checks
+
+The panel and `/grind?state=start` use the same preflight checker. Start reloads the
+track and its support layout, checks them before accessing learned icons or the
+browser, and passes the checked snapshot to the run. Editing a file after that
+does not alter a running track. Refocus the track field to refresh a preview after
+editing its file.
+
+Use the read-only endpoint before starting an imported preset:
+
+```powershell
+.\scripts\assistant.ps1 '/track?path=通用轨道/6美味/1曲奇.txt&level=美味/曲奇&cards=小火炉:日光炉,海星:红柳烤串机'
+```
+
+The response includes `effectiveDeck` and `compatibility` with `CanStart` and
+`Diagnostics`. Each diagnostic has a severity, stable code, source line where
+available, card name, and explanation. Without `cards` or `map`, it checks all
+opening cards; with either mapping it checks the selected subset, as Start does.
+Pass `shovel=1` to include shovel semantics. This endpoint does not inspect the
+browser or verify whether learned icons exist. An incompatible start returns HTTP
+409 with the error descriptions; malformed support layouts return HTTP 400.
+
+Errors include damaged steps, invalid or out-of-range cells, duplicate
+headers or card names, invalid character positions, inconsistent declared deck
+size, later wave sections, active gem actions, unknown flags/headers, unsupported
+special layers, and non-default settings the executor does not implement. `放卡限速`
+accepts 0 for the normal runner cadence or an integer from 1 to 5 to limit card
+attempts per second. A limited attempt is measured from the start of the previous
+card action; shovel actions are unchanged. Selected
+`极` cards can use delay, trigger mode, minimum flames, an ordinary-card count,
+termination count, and termination time. A card-count condition needs its named
+layer-3 card selected in the opening deck. The count uses confirmed board evidence;
+an unreadable or unconfirmed card cannot satisfy a positive threshold. A positive
+flame threshold requires the locally installed `火苗`
+or `火苗_win7` digit masks under the configured track-editor directory; missing
+masks block Start. A failed read is unknown, distinct from zero, and never reuses
+an old value. A frame that has stopped changing for five seconds also invalidates
+the reading. Maintenance mode (`0`) resets a pending delay when the threshold
+reading is lost and starts a new delay after each confirmed placement. Trigger mode
+(`1`) latches after the first valid observation and delay. Termination count uses
+confirmed placements and is rolled back after a late rejection; termination time
+uses elapsed battle time. Other active condition fields, including wave, image,
+targeting and follow conditions, remain blocked. Inactive condition fields without
+`极` produce a warning. Malformed active basic fields also block Start.
+Zero/empty/`NULL` defaults, editor metadata, and the editor-only `锁` and `x` flags do not
+block a run.
+
+Layer-5 cooldown cards with explicit opening formation cells can target occupied
+cells and do not reserve those cells as permanent cards. This covers `冰激凌` in
+tracks such as 火山/炭烧日. The editor's `冰沙` fallback-cell behavior, non-shovel
+layer 0, layers 4 and 6, and later-wave changes remain blocked. These additions
+have not been validated in
+live gameplay.
+
+Timed rows without `独` use synchronized track time. It starts with the battle clock
+and excludes the time spent executing ordinary timed placements (including a
+timed shovel action). An `独` row uses elapsed battle time without that offset.
+Extreme (`极`) placements do not add to the offset, but their timed start marker
+uses the selected row's clock. This follows the track executor's scheduling rule;
+the actual CEF input duration is measured rather than copying its input delay.
+Whole-second and one-decimal-second steps use the editor's 0.1-second clock. A
+nonzero step must be at least one second and no later than 960 seconds;
+additional decimal digits are rejected rather than silently rounded. Time-zero
+fill formations remain available.
+A continuous `极` fill formation may have one timed start marker, such as `035|49`
+followed by time-zero cells. Scheduled `补` without `极` uses each positive-time
+entry as a fill event; `00` is a timed event without a target cell, while playable
+cells on the same row form the placement set. A full formation consumes its event
+without clicking. The runner makes one confirmed placement per event and retries a
+refusal; it does not copy the editor's multi-click input sequence. Later timed
+markers on an `极` formation and unresolved requested support inheritance remain
+blocked. These checks expose
+existing execution differences; they do not add wave
+changes or targeting. Some previously accepted presets now stop before entering
+the game instead of silently dropping their requirements.
+
+An intentionally unmapped card or disabled shovel emits a warning. Structural
+errors remain blocking even on skipped rows, and later-wave sections remain
+blocking for the whole track. Unknown priority queue cards are errors; known but
+unmapped queue cards are reported as skipped. There is no bypass flag for errors.
+In a solo room, `人物2位置` describes the unused second player and is reported as
+a warning even when it names playable cells. Character placement
+continues to use `人物1位置`. Selecting “do not bring” for a known card, including
+one named in the priority queue, leaves warnings but does not block Start.
+Automatic deck building supports up to 11 selected cards; manual slot mapping
+retains the existing 18-slot limit. Time-zero formation markers mixed into
+ordinary non-`补` schedules are not supported.
+The report covers implemented syntax and execution limits, not whether a formation
+can win. Diagnostic warnings and support-resolution information are also retained
+in the local run log.
+
+## Editing a track copy
+
+Choose a track in the operation panel and open `编辑轨道副本…`. The editor lists cards
+from every wave and lets you change selected headers, a card specification, or a
+time/cell entry; steps can be replaced, appended, deleted, or reordered. Use
+`035.5` and `49` in the two fields for `035.5|49`; `00` is available for a timed
+scheduled-fill event. Undo and redo operate on the in-memory copy. The preview
+button shows the edited board and timeline, while the diagnostic box reports
+whether the opening plan can run with the selected stage's support layout.
+
+`另存副本…` writes a new UTF-8 file under
+`%LOCALAPPDATA%\FvmAssistant\edited-tracks\` and loads that absolute path in the
+operation panel. The imported preset is never overwritten. Choose a new filename
+for each saved version; an existing file is not replaced. Source lines outside the
+edited card rows are preserved, including headers and later waves. The
+editor does not create or execute later-wave behavior, and the compatibility
+report remains authoritative before Start. Edited tracks are private local state;
+review them before sharing.
+
+## Recording a track
+
+In a room, build a deck with learned cards, start recording, play a round manually, then stop recording and use “generate track from latest recording.” By default it saves under `vendor\track\预制轨道\我的轨道\<stage>-<time>.txt`; because `vendor/` is ignored, generated tracks remain local. The API route `/record-track?save=<name>` also generates a track; without `save`, it returns parsed data and track text only.
+
+`RecordingReader` takes the last room deck before Start and matches learned 42×50 icons. It interprets a card-slot click followed by a grid click as a placement, checks the frame at mouse-down, looks at neighboring cells near grid borders, and confirms visible changes for up to 5 seconds (with a longer fallback window). A repeated grid click within four seconds can be the same card's retry. It deduplicates card/cell pairs and writes a UTF-8 preset track, using known layer/cooldown values where possible. A recording with several rounds uses the round with the most placements.
+
+Generated tracks encode placement order and cells, but not wave-dependent formations or conditions. Temporary manual placements and shovels may be included, so inspect and edit the result before relying on it. Two manually recorded 曲奇 runs were checked against their frames: one included 11 日光炉 cells, 18 红柳烤串机 cells, and 10 shovel actions; the other included 6 and 8 cells with the character at 33.
+
+Newly generated shovel rows include `独` because recording times use elapsed battle
+time. Older generated files are unchanged; a timed shovel row without `独` uses
+synchronized track time when shovels are enabled.
+
+## Track and board rules
+
+The track editor's local data is under `vendor\track`. It supplies `附加程序\文本\普通关卡.txt` (map coordinates and boss-key information), preset tracks, support layouts, and image templates. Locally converted track text is UTF-8 without BOM; the original GBK archive stays local. The application tries UTF-8 first and GBK on decode failure; generated tracks are UTF-8. `附加程序\文本\龙图.txt` is binary, despite its extension.
+
+Water and sky cells may require a support card (`木盘子`, `棉花糖`, or `麦芽糖`). The application reads the matching `承载轨道` layout and waits for its own support before placing another card on that cell. Some water maps start with game-provided support; these cells can be used directly, but a rejected placement causes support to be replenished first. A support layout is matched by selected stage or the track's folder; missing layouts use the older placement rules.
+
+Fixed sky gaps are read from time-zero support entries. Timed-only layouts are also retained. An empty opening support row with `继` imports its matching default support schedule; `棉花糖` and `麦芽糖` are equivalent for this lookup. For example, an empty `麦芽糖` row with spec `7[1]继` uses the selected cloud stage's defaults. When the opening `继` row supplies cells, those locations remain in place while default times, independent/extreme timing flags, and conditions are imported by index. If that produces a timed `00` event, the row needs scheduled `补`; otherwise preflight blocks the unclickable cell. An empty row without `继` retains only the older fixed-cell fallback, and only for a matching support card.
+
+Timed cloud steps activate their support dependency when due, invalidate remembered cards at a new cloud opening, and run ahead of ordinary `极` placements. Both timed and formation-based ordinary cards wait for support on an active gap. A failed support remains pending: its retry interval starts at 500 ms for six seconds after the first attempt, then becomes five seconds. A newly due step takes priority over old repairs, and a completed later repair of the same cell supersedes older ones. Support slots must be visibly ready for one second before an attempt. A late rejection restores the affected timed step without replaying other completed steps. A 2026-09-26 manual test of the earlier implementation placed all six explicit timed supports and won two 棉花日 rounds; that observation does not validate these changes.
+
+The [track executor source review](track-editor-analysis.md) explains the implementation reference and the repaired failure paths. The author's source is cloned locally at `sample/FvmTrack`; it remains ignored and is not a build dependency.
+
+On animated backgrounds, comparison against the initial frame alone cannot determine whether a cell is empty. The application still compares empty-looking cells in an animated column, but no longer permanently excludes an uncertain cell after one attempt. Unknown cells are probed in least-recently-tried order, at most one per card every ten seconds and with at least thirty seconds before retrying the same cell. This also reaches a final empty cell that has no empty neighbor.
+
+For ordinary layer-3 cards, the first successful pick-up attempts learn foreground color features from two held-card frames after removing colors in two background frames. Features stay in memory for that battle and are checked inside each cell's interior to limit interference from adjacent cards. Negative feature evidence is used only after the card was recognized in that cell. Ownership is refreshed independently of target selection, including on full columns; at least three absence observations spanning one second are required to forget a card. If feature learning cannot validate an ordinary card on a cloud or recognized animated board, ownership becomes eligible for re-evaluation after 45 seconds and uses the bounded probe policy. Support and shield recognition retain their separate image comparisons.
+
+Tracks may specify placement time (`035|49` means second 35 at cell 49) or a priority queue such as `优先队列=海星,海星,狮子座`. Both are supported. `绝` cards may bypass the priority queue; a support card can be placed to unblock its first target, and an unplaceable queue head is skipped after 30 seconds. A minimum flame count such as `海星 7[3]补极,0,0,200` is enforced when its digit masks are available. Wave-dependent changes and image conditions are not implemented.
+
+## Recognition and retries
+
+| Signal | Current method |
+| --- | --- |
+| Screen state | Small templates named `(x,y)name.png`, from the local track editor or `src/FvmAssistant/templates/` |
+| Card availability | Brightness of the white cost label below a card (ready about 0.93, unavailable about 0.52); support waits for one second of observed readiness |
+| Flame counter | Match locally installed 6×10 masks, then classify the visible top and side strokes when the live Flash font differs; unreadable or stale frames yield unknown |
+| Card picked up | Cost label darkens; allow up to 700 ms when the game is busy |
+| Placement confirmation | Probe the card slot after clicking the cell: a card still in hand can be put back, while a successfully placed card remains on cooldown; late server rejection is corrected on the next pick-up |
+| Empty cell | Compare interior pixels with the start-of-battle frame, with special handling for animated backgrounds and support layers |
+| Card still present | Validated foreground color features for ordinary cards, otherwise before/after image comparisons; multiple absence observations are required before replenishment |
+| Drops | Sweep mouse points about 20 px apart, prioritizing the last two columns and flame-producing cards; make a full sweep every 45 seconds, or every 90 seconds with automatic flame pickup |
+
+The room password box may be empty after a new login. The loop checks the checkbox and visible asterisks, reuses a remembered password if present, otherwise types a random four-digit room password and confirms it appeared. If entry fails, it creates a room with the 2P slot closed. The generated room password can appear in the local run log; do not share that log unredacted.
+
+Boss continuation occurs in the same battle with the existing board and flames. The victory prompt times out after about eight seconds; the loop retries “continue” up to three times, then falls back to rewards if it does not re-enter battle. A missing boss key can bypass the prompt. A manual 曲奇 boss run on 2026-09-26 took about five minutes including the normal stage. Only the first chest flip is free; the loop uses that flip.
+
+## Loading problems and known limits
+
+The iframe (`td-4399.123u.com`) and resource CDN (`q.ms.huanlecdn.com`) can resolve to unreliable nodes. Startup probes several TLS connections and selects an available iframe IP. A stalled iframe is refreshed after 30 seconds; a stuck `加载中 100%` state is also refreshed after 30 seconds. Outside a grind, the loader watchdog manages refreshes; within a grind, the grind loop does. Repeated failures can require waiting or restarting to probe nodes again.
+
+The application does not yet recognize defeat reliably or perform wave-dependent or advanced conditional track actions. The restricted two-account mode has been verified for manually paired 曲奇 rooms, but automatic pairing still needs a live room-number recognition fix and is limited to a visible room-list entry. Basic conditions have synthetic regression coverage. On 2026-09-26, one live 曲奇 round with a temporary two-card track completed after a page refresh: the producer card and a card gated at 200 flames both had confirmed placements, and the loop returned to the room with one round completed. The counter was briefly unreadable during that battle, so this observation verifies recovery and a successful gated placement, not continuous reading accuracy or every condition mode. Before the refresh, room card-list loading timed out and a manual-slot retry could not leave the room. A non-victory battle ending stops the current run. These are implementation limits, not promises that a preset track will win a particular stage.

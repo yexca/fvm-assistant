@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FvmAssistant 跨域 iframe 测试页</title>
+<style>
+  body { margin: 0; background: #2a2a2a; color: #ddd; font: 14px sans-serif; }
+  header { height: 61px; padding: 8px 12px; box-sizing: border-box; }
+  /* Loaded from http://localhost while this page is http://127.0.0.1: a cross-origin frame, like the game. */
+  iframe { position: absolute; left: 19px; top: 61px; width: 1040px; height: 680px; border: 3px solid #555; }
+</style>
+</head>
+<body>
+<header>外层页面（127.0.0.1），游戏在跨域 iframe（localhost）里。</header>
+<iframe id="game-frame" src="http://localhost:8765/index.html"></iframe>
+</body>
+</html>
