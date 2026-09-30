@@ -367,6 +367,12 @@ namespace FvmAssistant.Automation
                         victory = true;
                         if (_settings.Boss && !bossUnavailable && !bossTried && battle != null)
                         {
+                            if (_settings.Duo != null && !_settings.Duo.BossReleased(RoundsDone + 1))
+                            {
+                                State = "duo-boss-ready";
+                                await Task.Delay(150, ct).ConfigureAwait(false);
+                                break;
+                            }
                             bossTried = true;
                             Snapshot($"round{RoundsDone + 1}-victory");
                             Say($"通关战胜利：继续作战，进 boss 关（消耗 {_settings.Level?.Key ?? "钥匙"}）");
@@ -375,7 +381,12 @@ namespace FvmAssistant.Automation
                             // A click right after the dialog appeared was once ignored, so try again while the
                             // ≈8 s countdown lasts, keeping a picture of what each click led to.
                             bool entered = false;
-                            for (int attempt = 1; attempt <= 3 && !entered; attempt++)
+                            if (_settings.Duo?.Role == DuoRole.Guest)
+                            {
+                                Say("Waiting for the host to continue into the boss stage");
+                                entered = await WaitForAsync(s => s == GameScreen.Battle, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+                            }
+                            else for (int attempt = 1; attempt <= 3 && !entered; attempt++)
                             {
                                 await ClickAndParkAsync(ContinueToBoss, 300, ct).ConfigureAwait(false);
                                 entered = await WaitForAsync(s => s == GameScreen.Battle, TimeSpan.FromSeconds(2.2), ct).ConfigureAwait(false);
@@ -410,6 +421,39 @@ namespace FvmAssistant.Automation
                         Snapshot($"round{RoundsDone + 1}-victory");
                         Say("胜利：领取奖品" + (_settings.Boss ? "" : "（不进 boss 关）"));
                         await ClickAndParkAsync(TakeReward, 1200, ct).ConfigureAwait(false);
+                        break;
+
+                    case GameScreen.AwaitHostDecision:
+                        if (_settings.Duo?.Role != DuoRole.Guest)
+                            throw new InvalidOperationException("A host-choice dialog appeared outside the guest duo flow.");
+                        victory = true;
+                        if (_settings.Boss && !bossTried && battle != null)
+                        {
+                            State = "duo-boss-ready";
+                            if (!_settings.Duo.BossReleased(RoundsDone + 1))
+                            {
+                                await Task.Delay(150, ct).ConfigureAwait(false);
+                                break;
+                            }
+                            bossTried = true;
+                            Say("Waiting for the host to continue into the boss stage");
+                            if (!await WaitForAsync(s => s == GameScreen.Battle, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false))
+                            {
+                                bossUnavailable = true;
+                                Say("The host did not enter the boss stage.");
+                                break;
+                            }
+                            State = $"boss (round {RoundsDone + 1})";
+                            var guestBossOutcome = await battle.ContinueAsync(ct).ConfigureAwait(false);
+                            if (guestBossOutcome != BattleOutcome.Victory)
+                            {
+                                Snapshot("boss-" + guestBossOutcome);
+                                throw new InvalidOperationException("Guest boss battle did not end in victory: " + guestBossOutcome);
+                            }
+                            bossWon = true;
+                            Snapshot($"round{RoundsDone + 1}-boss-victory");
+                        }
+                        else await Task.Delay(250, ct).ConfigureAwait(false);
                         break;
 
                     case GameScreen.TreasureShuffle:

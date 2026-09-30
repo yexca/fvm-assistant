@@ -63,7 +63,10 @@ namespace FvmAssistant
                 case "/track": return Track(r);
                 case "/record-track": return RecordTrackAsync(r);
                 case "/cards": return CardsAsync(r);
+                case "/portal": return PortalAsync(r);
                 case "/deck": return DeckAsync(r);
+                case "/missions": return MissionsAsync(r);
+                case "/guild-tasks": return MissionsAsync(r);
                 default: throw new HttpError(404, $"unknown endpoint {r.Path}; see /help");
             }
         }
@@ -91,7 +94,7 @@ namespace FvmAssistant
                 "/duo?state=start&role=host|guest&rounds=N&track=...&cards=...   start in an already paired room",
                 "/duo?state=start&role=host|guest&level=...&password=1234&room=N   pair automatically (room is guest-only)",
                 "/duo?state=plan&track=...&cards=...&level=...   inspect one account's conservative duo formation",
-                "/duo?state=release&phase=room|battle&run=ID&round=N   coordinator gate; /duo shows progress",
+                "/duo?state=release&phase=room|battle|boss&run=ID&round=N   coordinator gate; /duo shows progress",
                 "/duo?state=stop   stop the paired run on this account",
                 "/track?path=...&level=岛/关卡[&shovel=1][&cards=轨道卡:我的卡 | &map=轨道卡:1]   inspect compatibility without game input",
                 "   ...&cards=小火炉:日光炉,海星:红柳烤串机   build this deck in the room first (replaces map/slots)",
@@ -99,14 +102,26 @@ namespace FvmAssistant
                 "/cards[?learn=日光炉,,,,红柳烤串机]   list learned card icons / learn them from the current deck bar",
                 "/deck?cards=日光炉,红柳烤串机   empty the room's deck and add these cards in order",
                 "/record-track[?rec=<recording-id>][&save=曲奇-录制[&overwrite=1]]   read a recording back as a track (default: newest)",
+                "/portal?state=select&server=<server-number>   choose a server through the visible 4399 portal controls",
+                "/guild-tasks?state=publish   publish guild-leader tasks once, using visible controls",
+                "/missions?state=inspect   current board state and guarded, private capture",
+                "/missions?state=claim&selectedHash=...   claim a verified completed reward",
+                "/missions?state=accept&row=Y&listHash=...   click a visible task and verify 任务进行中",
             },
         };
 
         // ---------- state ----------
+        private Task<object> MissionsAsync(HttpRequest r) => Guard<object>(async () =>
+        {
+            return await _grind.MissionActionAsync(r.Q("state", "inspect"), r.QInt("row", 0),
+                r.Q("listHash"), r.Q("selectedHash")).ConfigureAwait(false);
+        });
 
         private object Status(HttpRequest r)
         {
             var view = _form.View;
+            var offscreen = view as OsrView;
+            bool rendererReady = offscreen == null || offscreen.RendererAvailable;
             return new
             {
                 mode = _options.Mode.ToString(),
@@ -114,14 +129,16 @@ namespace FvmAssistant
                 gpu = _options.Gpu,
                 keepRendering = _options.KeepRendering,
                 flashPlugin = CefBootstrap.FlashVersion,
-                browserReady = view.BrowserOrNull != null,
+                browserReady = rendererReady && view.BrowserOrNull != null,
+                rendererReady,
+                rendererUnavailableReason = offscreen?.RendererUnavailableReason,
                 loading = view.WebBrowser.IsLoading,
                 url = UrlText.Redact(view.WebBrowser.Address, r.Flag("full")),
                 title = _form.Hooks.Title,
                 pluginCrashes = _form.Hooks.PluginCrashes,
                 renderTerminations = _form.Hooks.RenderTerminations,
                 window = WindowInfo(),
-                flash = PluginJson(_flash, r.Flag("full")),
+                flash = rendererReady ? PluginJson(_flash, r.Flag("full")) : null,
                 captureDir = _paths.Captures,
                 logFile = _paths.LogFile,
             };
@@ -308,6 +325,8 @@ namespace FvmAssistant
 
         private async Task<object> PointerAsync(HttpRequest r, bool click)
         {
+            if (_grind.Running || _grind.OperationLock.CurrentCount == 0)
+                throw new HttpError(409, "Manual pointer input is disabled while automation owns this account.");
             double x = r.QDouble("x"), y = r.QDouble("y");
             var space = r.Q("space", "flash");
             var method = r.Q("method", "cef");
@@ -621,6 +640,7 @@ namespace FvmAssistant
                 state = g.State,
                 round = g.RoundsDone + 1,
                 roundsDone = g.RoundsDone,
+                bossRoundsDone = g.BossRoundsDone,
                 screen = g.LastScreen.ToString(),
                 runDirectory = g.RunDirectory,
                 messages = g.Messages.Skip(Math.Max(0, g.Messages.Count - 20)).ToList(),
@@ -703,6 +723,36 @@ namespace FvmAssistant
             };
         });
 
+        private Task<object> PortalAsync(HttpRequest r) => Guard<object>(async () =>
+        {
+            var browser = RequireBrowser();
+            var address = _form.View.WebBrowser.Address;
+            if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) ||
+                uri.Host != "my.4399.com" || !uri.AbsolutePath.EndsWith("/wd-air", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Open the 4399 server selection page first.");
+            var scan = await PortalSelection.ScanAsync(browser).ConfigureAwait(false);
+            if (r.Q("state") == "inspect") return new { scan.inputs, scan.entries };
+            if (r.Q("state") != "select") throw new HttpError(400, "state must be inspect|select");
+            var server = r.Q("server") ?? "";
+            if (!Regex.IsMatch(server, "^[1-9][0-9]{0,3}$")) throw new HttpError(400, "server must be a 1-4 digit number");
+            var pair = PortalSelection.FindPair(scan);
+            var host = browser.GetHost();
+            await Input.ClickCefAsync(host, pair.input.CenterX, pair.input.CenterY).ConfigureAwait(false);
+            await Input.ReplaceCefTextAsync(host, server).ConfigureAwait(false);
+            await Task.Delay(250).ConfigureAwait(false);
+            await Input.ClickCefAsync(host, pair.entry.CenterX, pair.entry.CenterY).ConfigureAwait(false);
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < deadline)
+            {
+                var next = _form.View.WebBrowser.Address ?? "";
+                if (Uri.TryCreate(next, UriKind.Absolute, out var entered) &&
+                    entered.AbsolutePath.IndexOf("tpl-sid-" + server + "-", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return new { server, entered = true };
+                await Task.Delay(250).ConfigureAwait(false);
+            }
+            throw new InvalidOperationException("The server page did not confirm entry into server " + server + ". Check the open game window.");
+        });
+
         private Task<object> CardsAsync(HttpRequest r) => Guard<object>(async () =>
         {
             if (r.Q("learn") is string learn)
@@ -763,7 +813,12 @@ namespace FvmAssistant
 
         // ---------- helpers ----------
 
-        private IBrowser RequireBrowser() => _form.View.BrowserOrNull ?? throw new HttpError(409, "browser not initialized yet");
+        private IBrowser RequireBrowser()
+        {
+            if (_form.View is OsrView offscreen && !offscreen.RendererAvailable)
+                throw new HttpError(409, "Browser renderer is unavailable. Reload or reopen the game before sending input.");
+            return _form.View.BrowserOrNull ?? throw new HttpError(409, "browser not initialized yet");
+        }
 
         private T Ui<T>(Func<T> func) => _form.InvokeRequired ? (T)_form.Invoke(func) : func();
 

@@ -379,7 +379,7 @@ namespace FvmAssistant.Automation
                 var frame = _io.Grab();
                 var screen = _detector.Detect(frame);
                 // The 胜利 banner with the loot bar also proves the win, in case the dialog was missed.
-                if (screen == GameScreen.VictoryDialog || screen == GameScreen.Loot) return BattleOutcome.Victory;
+                if (screen == GameScreen.VictoryDialog || screen == GameScreen.AwaitHostDecision || screen == GameScreen.Loot) return BattleOutcome.Victory;
                 if (screen == GameScreen.Disconnected) return BattleOutcome.Disconnected;
                 if (screen == GameScreen.HealthNotice || screen == GameScreen.EventPopup)
                 {
@@ -1079,7 +1079,7 @@ namespace FvmAssistant.Automation
         {
             var frame = _io.Grab();
             var screen = _detector.Detect(frame);
-            if (screen == GameScreen.VictoryDialog || screen == GameScreen.Loot) throw new BattleOverException(BattleOutcome.Victory);
+            if (screen == GameScreen.VictoryDialog || screen == GameScreen.AwaitHostDecision || screen == GameScreen.Loot) throw new BattleOverException(BattleOutcome.Victory);
             if (screen == GameScreen.Disconnected) throw new BattleOverException(BattleOutcome.Disconnected);
             if (screen == GameScreen.HealthNotice || screen == GameScreen.EventPopup) throw new CoveredException();
             return frame;

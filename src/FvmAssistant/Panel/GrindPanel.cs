@@ -165,6 +165,37 @@ namespace FvmAssistant.Panel
             buttons.Controls.Add(_stop);
             Add(buttons);
 
+            Add(Heading("Missions"));
+            var missionButtons = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty, WrapContents = true };
+            var publishTasks = new Button { Text = "Publish guild-leader tasks", AutoSize = true };
+            publishTasks.Click += async (s, e) =>
+            {
+                try
+                {
+                    var result = await _grind.MissionActionAsync("publish");
+                    AppendLog(result.Result ?? result.View);
+                }
+                catch (Exception error) { MessageBox.Show(this, error.Message, "Guild tasks"); }
+            };
+            var claimTask = new Button { Text = "Claim selected task reward", AutoSize = true };
+            claimTask.Click += async (s, e) =>
+            {
+                try
+                {
+                    var before = await _grind.MissionActionAsync("inspect");
+                    var result = await _grind.MissionActionAsync("claim", selectedHash: before.SelectedHash);
+                    AppendLog(result.Result);
+                }
+                catch (Exception error) { MessageBox.Show(this, error.Message, "Mission rewards"); }
+            };
+            missionButtons.Controls.Add(publishTasks);
+            missionButtons.Controls.Add(claimTask);
+            Add(missionButtons);
+            _inputs.Add(publishTasks);
+            _inputs.Add(claimTask);
+            Add(new Label { Text = "Claim rewards first. Click a new task and verify 任务进行中 before its battle. Task scanning and stage selection remain attended.",
+                AutoSize = true, MaximumSize = new Size(310, 0), ForeColor = SystemColors.GrayText });
+
             _state = new Label { AutoSize = true, MaximumSize = new Size(310, 0), Margin = new Padding(0, 6, 0, 4) };
             Add(_state);
 
@@ -190,7 +221,7 @@ namespace FvmAssistant.Panel
             Add(fromRecordingRow);
             Add(new Label
             {
-                Text = "从房间里开始录制，手动打完一局后停止录制，再点这里：按你放卡的格子和顺序生成补阵轨道，存到 预制轨道\\我的轨道。卡组里的卡要先学习过。",
+                Text = "从房间里开始录制，手动打完一局后停止录制，再点这里：按你放卡的格子和顺序生成补阵轨道，存到当前账户的 tracks 文件夹。卡组里的卡要先学习过。",
                 AutoSize = true,
                 MaximumSize = new Size(310, 0),
                 ForeColor = SystemColors.GrayText,
@@ -326,7 +357,7 @@ namespace FvmAssistant.Panel
         private void EditTrack()
         {
             if (_loadedTrack?.Path == null) return;
-            using (var editor = new TrackEditorDialog(_loadedTrack.Path, _preflight?.Carriers))
+            using (var editor = new TrackEditorDialog(_loadedTrack.Path, _preflight?.Carriers, _grind.EditedTrackDir))
             {
                 editor.ShowDialog(this);
                 if (editor.SavedPath == null) return;

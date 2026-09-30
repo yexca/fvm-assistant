@@ -8,6 +8,7 @@ The current application is **FvmAssistant**, a working prototype rather than a p
 | --- | --- |
 | Single-account 曲奇 stage loop | One live round completed with Victory, rewards, and return to 美味镇 |
 | Two accounts already paired in one 曲奇 room | One live round and then two consecutive rounds completed on both accounts; see the [manual two-account guide](docs/two-account.md) |
+| Friend invitation pairing and two-account 美味/神殿 boss | One live round completed by both accounts in a shared island area, including boss and room return; see [two-account guide](docs/two-account.md) |
 | Automatic two-account room pairing with `-Level` | The host created a room, but live room-number recognition failed before the guest joined |
 | Single-account task queue | Read-only `-DryRun` checked; a live queue sequence has not been run |
 | Track preview and copy editor | Built and covered by deterministic tests; visual layout and live use have not been checked |
@@ -33,6 +34,14 @@ To use the Makefile, run `make help`, `make check`, or `make release`. `make che
 
 At first launch, log in manually and select a server. In off-screen mode, the right-hand automation panel can then select a stage, track, learned cards, and round count. The default control endpoint is on `127.0.0.1:18765`; `scripts\assistant.ps1 /help` lists its routes. Do not expose or forward that port.
 
+The separate controller window starts without a browser and is also the default when the executable is opened without arguments:
+
+```powershell
+.\src\FvmAssistant\bin\x64\Debug\FvmAssistant.exe --mode controller
+```
+
+It manages account profiles and server choices, learned card icons, private tracks and success markers, stage queues, two-account runs, and per-account cleanup. A numeric server such as `<server-number>` is entered through the visible 4399 portal controls with CEF input; a saved direct server URL is also supported. The controller never inspects saved cookies. When a queue request opens a closed game window, it waits for a recognized game screen; if login has not completed, it asks you to log in. Two-account manual-room runs still require both accounts to be paired before starting.
+
 For several stages in sequence, `scripts/queue.ps1` validates a local JSON plan and runs each stage only after the previous one finishes. See [task queues](docs/automation.md#single-account-task-queues). The panel can preview a track's formations and timeline and [edit a separate copy](docs/automation.md#editing-a-track-copy) without overwriting the imported preset.
 
 The two-account runner uses two off-screen instances with different `--profile` and `--port` values. The verified path is to pair the accounts in one room manually, then run `scripts/duo.ps1`; follow the [manual two-account guide](docs/two-account.md). The `-Level` path is implemented but currently stops when it cannot read the live room number. See [two-account behavior](docs/automation.md#two-account-rooms) for plan restrictions and recovery.
@@ -49,9 +58,9 @@ The two-account runner uses two off-screen instances with different `--profile` 
 | `vendor/` | Local Flash plugin and track editor data; ignored by Git |
 | `sample/` | Local third-party reference material; ignored by Git |
 
-Application state lives in `%LOCALAPPDATA%\FvmAssistant\`, including login profiles, screenshots, recordings, card icons, settings, and logs. Those files may contain account information. Keep them out of Git and review any excerpt before sharing it. Read [the security policy](docs/security.md) before staging files or sharing diagnostics.
+New application state lives in the ignored `.fvm-data\` folder at the repository root, including login profiles, screenshots, recordings, card icons, tracks, controller settings, and logs. Those files may contain account information. Keep them out of Git and review any excerpt before sharing it. Read [the security policy](docs/security.md) before staging files or sharing diagnostics. The old `%LOCALAPPDATA%\FvmAssistant\` folder is not migrated or deleted automatically; close the application and copy the data you want to retain into `.fvm-data\` before removing the old folder.
 
-The application was previously named FvmSpike. Existing profiles and learned card icons stay in the same runtime directory; the old `scripts/spike.ps1` command remains as a compatibility entry point. New logs use the `assistant-YYYYMMDD.log` name while older log files are left in place.
+The application was previously named FvmSpike. The old `scripts/spike.ps1` command remains as a compatibility entry point. New logs use the `assistant-YYYYMMDD.log` name.
 
 ## Development
 

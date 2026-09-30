@@ -37,6 +37,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not update test index.' }
     $clean = Run-Check -Staged
     if ($clean.ExitCode -ne 0) { throw "Staged scanner rejected clean content: $($clean.Message)" }
+
+    $private = Join-Path $testRoot '.fvm-data\controller.json'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $private) | Out-Null
+    [IO.File]::WriteAllText($private, '{}', (New-Object System.Text.UTF8Encoding($false)))
+    & git.exe -C $testRoot add -f -- .fvm-data/controller.json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stage private-path probe.' }
+    $privateCheck = Run-Check -Staged
+    if ($privateCheck.ExitCode -eq 0 -or $privateCheck.Message -notmatch 'private or generated path') {
+        throw 'Staged scanner did not reject forced runtime data.'
+    }
     Write-Host 'Sensitive-data scanner tests passed.'
 }
 finally {

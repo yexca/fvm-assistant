@@ -7,6 +7,8 @@ namespace FvmAssistant
 {
     internal enum ViewMode
     {
+        /// <summary>Independent account and task controller; does not initialize CEF.</summary>
+        Controller,
         /// <summary>Normal CEF child window (what CefFlashBrowser uses).</summary>
         Windowed,
         /// <summary>Windowless rendering: frames arrive in memory, we paint them ourselves.</summary>
@@ -18,11 +20,11 @@ namespace FvmAssistant
         public const string DefaultUrl = "https://my.4399.com/yxmsdzls/wd-air";
 
         public const string Usage =
-            "FvmAssistant.exe [--mode windowed|osr] [--profile <name>] [--url <url>] [--port <n>]\n" +
+            "FvmAssistant.exe [--mode controller|windowed|osr] [--profile <name>] [--url <url>] [--port <n>]\n" +
             "             [--flash <pepflashplayer.dll>] [--viewport <W>x<H>] [--no-gpu] [--allow-throttling] [--dpi-aware]\n" +
             "             [--track-dir <轨道编辑器数据目录>]";
 
-        public ViewMode Mode { get; private set; } = ViewMode.Windowed;
+        public ViewMode Mode { get; private set; } = ViewMode.Controller;
         public string Profile { get; private set; } = "main";
         public string Url { get; private set; } = DefaultUrl;
         public int Port { get; private set; } = 18765;
@@ -54,9 +56,10 @@ namespace FvmAssistant
                 {
                     case "--mode":
                         var mode = Next();
-                        if (mode == "windowed") o.Mode = ViewMode.Windowed;
+                        if (mode == "controller") o.Mode = ViewMode.Controller;
+                        else if (mode == "windowed") o.Mode = ViewMode.Windowed;
                         else if (mode == "osr" || mode == "offscreen") o.Mode = ViewMode.Offscreen;
-                        else throw new ArgumentException("--mode 只能是 windowed 或 osr");
+                        else throw new ArgumentException("--mode 只能是 controller、windowed 或 osr");
                         break;
                     case "--profile":
                         o.Profile = Next();

@@ -37,7 +37,14 @@ namespace FvmAssistant.Automation
             _stage = stage;
         }
 
-        private IBrowserHost Host => _view.BrowserOrNull?.GetHost() ?? throw new InvalidOperationException("browser is not ready");
+        private IBrowserHost Host
+        {
+            get
+            {
+                _view.RequireRenderer();
+                return _view.BrowserOrNull?.GetHost() ?? throw new InvalidOperationException("browser is not ready");
+            }
+        }
 
         public StageFrame Grab()
         {
@@ -53,8 +60,10 @@ namespace FvmAssistant.Automation
             var pressed = button == MouseButtonType.Right ? CefEventFlags.RightMouseButton : CefEventFlags.LeftMouseButton;
             host.SendMouseMoveEvent(x, y, false, CefEventFlags.None);
             await Task.Delay(30).ConfigureAwait(false);
+            _view.RequireRenderer();
             host.SendMouseClickEvent(x, y, button, false, 1, pressed);
             await Task.Delay(60).ConfigureAwait(false);
+            _view.RequireRenderer();
             host.SendMouseClickEvent(x, y, button, true, 1, CefEventFlags.None);
         }
 
@@ -72,10 +81,12 @@ namespace FvmAssistant.Automation
             host.SendFocusEvent(true);
             foreach (char ch in text)
             {
+                _view.RequireRenderer();
                 int vk = ch == '\b' ? 8 : char.ToUpperInvariant(ch);
                 host.SendKeyEvent(new KeyEvent { Type = KeyEventType.RawKeyDown, WindowsKeyCode = vk });
                 if (ch != '\b') host.SendKeyEvent(new KeyEvent { Type = KeyEventType.Char, WindowsKeyCode = ch });
                 await Task.Delay(40).ConfigureAwait(false);
+                _view.RequireRenderer();
                 host.SendKeyEvent(new KeyEvent { Type = KeyEventType.KeyUp, WindowsKeyCode = vk });
                 await Task.Delay(40).ConfigureAwait(false);
             }

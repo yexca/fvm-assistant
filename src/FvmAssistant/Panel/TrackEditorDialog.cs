@@ -30,12 +30,11 @@ namespace FvmAssistant.Panel
         private readonly TextBox _diagnostics = new TextBox();
         private readonly Button _undo = new Button();
         private readonly Button _redo = new Button();
-        private readonly string _saveRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "FvmAssistant", "edited-tracks");
+        private readonly string _saveRoot;
 
-        public TrackEditorDialog(string sourcePath, CarrierMap carriers)
+        public TrackEditorDialog(string sourcePath, CarrierMap carriers, string saveRoot = null)
         {
+            _saveRoot = saveRoot ?? Path.Combine(AppPaths.DataRoot(), "edited-tracks");
             _document = new TrackEditDocument(sourcePath, EditorText.ReadAllText(sourcePath));
             _carriers = carriers;
             Text = "轨道步骤编辑";

@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Windows.Forms;
 using CefSharp;
+using FvmAssistant.Controller;
 
 namespace FvmAssistant
 {
@@ -21,6 +22,22 @@ namespace FvmAssistant
             {
                 MessageBox.Show(e.Message + "\n\n" + AssistantOptions.Usage, "FvmAssistant");
                 return 2;
+            }
+
+            if (options.Mode == ViewMode.Controller)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                try
+                {
+                    using (var form = new ControllerForm()) Application.Run(form);
+                    return 0;
+                }
+                catch (Exception e)
+                {
+                    MessageBox.Show(e.Message, "FvmAssistant 控制台");
+                    return 7;
+                }
             }
 
             // CEF profiles cannot safely be opened by two processes at once. The account name is

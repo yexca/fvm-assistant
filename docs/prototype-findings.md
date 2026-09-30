@@ -11,7 +11,7 @@ The prototype, originally named FvmSpike, was built to answer three questions: c
 | `--mode windowed` | Standard CEF child window; useful for comparison |
 | `--mode osr` | Off-screen rendering into memory, then painted in the WinForms window; required for the automation panel |
 | Local API | `127.0.0.1:18765`, requires `X-Fvm-Assistant` (legacy `X-Fvm-Spike` remains accepted), rejects requests with an `Origin` header |
-| Runtime data | `%LOCALAPPDATA%\FvmAssistant\`: browser profiles, captures, logs, learned card icons, and panel settings |
+| Runtime data | `.fvm-data/`: browser profiles, captures, logs, learned card icons, and panel settings (earlier observations used `%LOCALAPPDATA%\FvmAssistant\`) |
 
 The process is DPI-unaware by default and forces browser scale 1, so one page pixel equals one Flash stage pixel, even on a scaled monitor. `--dpi-aware` opts into per-monitor rendering and changes the pixel mapping. The default viewport is 1280×800; the Flash stage is approximately 950×600.
 
@@ -104,3 +104,86 @@ also stopped safely when an invitation overlay covered the host's deck bar;
 after the user closed it, the same setup succeeded. Automatic room-number
 recognition and invitation-overlay detection remain open limitations. Local
 captures and run logs were kept outside the repository.
+
+On 2026-09-28, friend invitation pairing was checked live for
+美味/神殿. Both accounts navigated to a shared island area; the host created the 神殿 room,
+invited the guest from the first online Friends row, and the guest accepted the
+timed prompt. The coordinator compared room headers before starting. The first
+battle reached normal victory, but the guest stopped because its “等待房主选择”
+screen was not recognized. After adding that screen state and the paired boss
+gate, a second run completed normal and boss combat. Both `/duo` endpoints
+reported `finished`, `roundsDone=1`, `bossRoundsDone=1`, and `Room`. The host
+used the 神殿 preset with 日光炉 and 红柳烤串机; the guest used a separate 小火炉
+support track. These are observations for this account pair and stage, not a
+claim that other friend rows, areas, or stages have been verified.
+
+## 2026-09-30 attended port preparation
+
+The visible 火山 area menu offered area 1 and area 11 as two rows. The
+friend-pair script had incorrectly used the area number as a consecutive row
+index, putting area 11 outside that menu. Its sparse mapping now selects the
+second row for area 11 and rejects unobserved area numbers before input.
+Both accounts were manually switched to 火山11区 using the corrected row;
+this verifies the selection coordinate, not the full automated pairing path.
+`scripts/test-friend-pair.ps1` exercises the mapping without game input.
+
+## 2026-09-30 renderer-loss observation
+
+Renderer-loss guards now invalidate OSR captures, browser input, the displayed
+frame, and cached Flash status until navigation and fresh viewport paint prove
+recovery. A deterministic regression covers the failure/recovery state machine.
+The memory exhaustion cause and live recovery with this guard remain unverified;
+the change is a safety fix, not evidence of a repaired memory leak or completed
+gameplay.
+
+### Updated-build restart and invitation timeout
+
+After both old processes were closed, `make check` passed with 39 deterministic
+regressions, and both accounts were reopened from the updated Debug output.
+Both services reported `rendererReady=true` and no renderer terminations.
+Fresh live captures and CEF input worked during task inspection and room
+preparation; this does not validate recovery after an actual renderer failure.
+The guest's three eligible 曲奇 boss challenges were selected and verified
+in progress, and both accounts had existing 神殿钥匙.
+
+The host created a 曲奇 room and invited the confirmed guest from the Friends
+tab. The guest displayed the expected host and stage, but the attended capture
+and subsequent acceptance attempt were separated by roughly 37 seconds,
+exceeding the visible 15-second response window. The guest did not join and
+the host reported that the invitation could not be accepted. No battle was
+started or quest reward claimed in this attempt. This timeout does not prove
+a guest level restriction; a later retry needs a bounded, immediate invitation
+response rather than a model inspection round trip within that window.
+
+## 2026-09-30 to 2026-10-01 attended port and carry runs
+
+In 美味一区, immediate invitation acceptance after about 0.52 seconds still
+did not put the guest in the host's room. After both accounts were visibly
+switched to a shared island area, the guest could see and join the host's room directly
+from its list. The observed 美味 area menu had all eleven rows, unlike the
+previous two-row observation. The pairing helper now counts visible gold
+row markers, accepts only the observed two-row and eleven-row layouts,
+and explicitly selects the Friends tab. Synthetic regressions cover the
+layout mapping; the modified helper's full live pairing flow remains unverified.
+
+Repeated mission inspections without input produced different list hashes
+while the selected-pane hash stayed unchanged. Comparing private captures
+localized the changing pixels to the flashing category header. The white/yellow
+label-ink masks were identical. The list guard now uses that stable label
+mask, excluding status badges, while pending-reward and active-row checks
+remain separate. A deterministic regression verifies that header animation
+does not invalidate the guard but moved labels still do. Further battles were
+stopped for this repair. The updated guard has not yet been loaded into the
+two live instances or verified by a live accept action.
+After claiming all four rewards, attended visible-row clicks selected
+珍惜战斗伙伴LV3 and 无炸弹BOSS战03; both selected panes were verified
+任务进行中. No further battle was started. The two services remained idle
+with zero renderer terminations in this restarted session.
+
+The sensitive-data scan, scanner tests, area-menu regressions, independent
+Debug build, 40 automation regressions against that independent binary, and
+`git diff --check` passed. The default `make check` test step still references
+the older in-use Debug binary even when MSBuild uses an independent `OutDir`,
+so that combined invocation did not complete; its regression step was rerun
+explicitly against the new output. This is build and deterministic coverage,
+not live verification of the repaired mission guard.

@@ -23,6 +23,10 @@ param(
     [ValidateRange(1, 500)][int]$Rounds = 1,
     [switch]$HostShovel,
     [switch]$GuestShovel,
+    [switch]$Boss,
+    [switch]$FriendInvite,
+    [ValidateRange(1, 11)][int]$Area = 11,
+    [ValidateRange(1, 10)][int]$FriendRow = 1,
     [switch]$HostAutoFlame,
     [switch]$GuestAutoFlame
 )
@@ -96,11 +100,17 @@ try {
         throw 'One track places a card on the other character.'
     }
 
+    if ($FriendInvite) {
+        if (-not $Level) { throw '-FriendInvite requires -Level.' }
+        & (Join-Path $PSScriptRoot 'friend-pair.ps1') -HostPort $HostPort -GuestPort $GuestPort `
+            -Level $Level -Area $Area -FriendRow $FriendRow
+    }
+
     $hostQuery = @{
         state='start'; role='host'; rounds=$Rounds; track=$HostTrack; cards=$HostCards
-        shovel=[int]$HostShovel.IsPresent; autoflame=[int]$HostAutoFlame.IsPresent
+        shovel=[int]$HostShovel.IsPresent; boss=[int]$Boss.IsPresent; autoflame=[int]$HostAutoFlame.IsPresent
     }
-    if ($Level) {
+    if ($Level -and -not $FriendInvite) {
         $hostQuery.level = $Level
         $temporaryPassword = (Get-Random -Minimum 1000 -Maximum 10000).ToString()
         $hostQuery.password = $temporaryPassword
@@ -109,7 +119,7 @@ try {
     $hostSession = Invoke-Duo $HostPort '/duo' $hostQuery
 
     $hostRoom = 0
-    if ($Level) {
+    if ($Level -and -not $FriendInvite) {
         $hostRun = $hostSession.run
         $deadline = [DateTime]::UtcNow.AddSeconds(120)
         while ([DateTime]::UtcNow -lt $deadline) {
@@ -126,9 +136,9 @@ try {
 
     $guestQuery = @{
         state='start'; role='guest'; rounds=$Rounds; track=$GuestTrack; cards=$GuestCards
-        shovel=[int]$GuestShovel.IsPresent; autoflame=[int]$GuestAutoFlame.IsPresent
+        shovel=[int]$GuestShovel.IsPresent; boss=[int]$Boss.IsPresent; autoflame=[int]$GuestAutoFlame.IsPresent
     }
-    if ($Level) {
+    if ($Level -and -not $FriendInvite) {
         $guestQuery.level = $Level
         $guestQuery.password = $temporaryPassword
         $guestQuery.room = $hostRoom
@@ -147,7 +157,7 @@ try {
         $ready = Wait-Duo { param($s) $s[0].state -eq 'duo-room-ready' -and
             $s[1].state -eq 'duo-room-ready' -and $s[0].round -eq $round -and
             $s[1].round -eq $round } 120 "both room decks in round $round"
-        if ($Level -and ($ready[0].room -ne $hostRoom -or $ready[1].room -ne $hostRoom)) {
+        if ($Level -and -not $FriendInvite -and ($ready[0].room -ne $hostRoom -or $ready[1].room -ne $hostRoom)) {
             throw "The two accounts did not verify the same room in round $round."
         }
 
@@ -160,8 +170,21 @@ try {
         [void](Invoke-Duo $GuestPort '/duo' @{ state='release'; phase='battle'; run=$guestRun; round=$round })
         [void](Invoke-Duo $HostPort '/duo' @{ state='release'; phase='battle'; run=$hostRun; round=$round })
 
+        if ($Boss) {
+            [void](Wait-Duo { param($s) $s[0].state -eq 'duo-boss-ready' -and
+                $s[1].state -eq 'duo-boss-ready' } 1200 "both boss prompts in round $round")
+            [void](Invoke-Duo $GuestPort '/duo' @{ state='release'; phase='boss'; run=$guestRun; round=$round })
+            [void](Invoke-Duo $HostPort '/duo' @{ state='release'; phase='boss'; run=$hostRun; round=$round })
+        }
+
         [void](Wait-Duo { param($s) $s[0].roundsDone -ge $round -and
             $s[1].roundsDone -ge $round } 1200 "both settlements in round $round")
+        if ($Boss) {
+            $settled = Read-Duo
+            if ($settled[0].bossRoundsDone -lt $round -or $settled[1].bossRoundsDone -lt $round) {
+                throw "Boss was not completed by both accounts in round $round."
+            }
+        }
         Write-Host "Round $round/$Rounds completed by both accounts."
     }
     $completed = $true

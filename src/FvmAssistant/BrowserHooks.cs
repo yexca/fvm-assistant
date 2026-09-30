@@ -19,6 +19,7 @@ namespace FvmAssistant
 
         private readonly bool _autoDialogs;
         private IWebBrowser _browser;
+        private OsrView _offscreenView;
         private int _pluginCrashes;
         private int _renderTerminations;
         private int _autoReloads;
@@ -38,6 +39,7 @@ namespace FvmAssistant
 
         public void Attach(IGameView view)
         {
+            _offscreenView = view as OsrView;
             var browser = view.WebBrowser;
             _browser = browser;
             browser.LifeSpanHandler = new PopupsInPlace();
@@ -173,6 +175,7 @@ namespace FvmAssistant
 
             protected override void OnRenderProcessTerminated(IWebBrowser chromiumWebBrowser, IBrowser browser, CefTerminationStatus status)
             {
+                _owner._offscreenView?.RendererTerminated(status.ToString());
                 Interlocked.Increment(ref _owner._renderTerminations);
                 Log.Error("render process terminated: " + status);
             }

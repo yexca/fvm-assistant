@@ -73,7 +73,7 @@ $checked = 0
 foreach ($entry in $entries) {
     $path = $entry.Path.Replace('\', '/')
     $isPrivateEnv = $path -match '(?i)(^|/)\.env(?:\..*)?$' -and $path -notmatch '(?i)(^|/)\.env\.example$'
-    if ($path -match '(?i)(^|/)(vendor|sample|bin|obj|profiles|captures|recordings|logs|cards)(/|$)' -or
+    if ($path -match '(?i)(^|/)(\.fvm-data|vendor|sample|bin|obj|profiles|captures|recordings|logs|cards)(/|$)' -or
         $isPrivateEnv -or
         $path -match '(?i)(^|/)(?:id_rsa|id_ed25519|.*\.(?:pem|key|pfx|p12|kdbx|log|har|sqlite|sqlite3)|.*credentials.*\.json|.*secrets.*\.json)$') {
         $findings.Add("$path : private or generated path")

@@ -63,6 +63,7 @@ namespace FvmAssistant
     {
         private readonly ChromiumWebBrowser _browser;
         private int _repaintQueued;
+        private readonly RendererFrameHealth _frameHealth = new RendererFrameHealth();
 
         // Where automation last put the injected cursor, which the page itself never draws.
         private const int TrailLength = 28;
@@ -88,7 +89,16 @@ namespace FvmAssistant
             _markerTimer.Tick += (s, e) => Invalidate();
             _browser.FrameLoadStart += (s, e) =>
             {
-                if (e.Frame.IsMain) LastPageLoadUtc = DateTime.UtcNow;
+                if (e.Frame.IsMain)
+                {
+                    LastPageLoadUtc = DateTime.UtcNow;
+                    _frameHealth.MainFrameStarted();
+                }
+            };
+            _browser.FrameLoadEnd += (s, e) =>
+            {
+                if (e.Frame.IsMain) _frameHealth.MainFrameCompleted(e.HttpStatusCode == 0 ||
+                    (e.HttpStatusCode >= 200 && e.HttpStatusCode < 400));
             };
         }
 
@@ -97,7 +107,7 @@ namespace FvmAssistant
 
         public Control Control => this;
         public IWebBrowser WebBrowser => _browser;
-        public IBrowser BrowserOrNull => _browser.IsBrowserInitialized ? _browser.GetBrowser() : null;
+        public IBrowser BrowserOrNull => RendererAvailable && _browser.IsBrowserInitialized ? _browser.GetBrowser() : null;
         public bool IsOffscreen => true;
 
         public event EventHandler<AddressChangedEventArgs> AddressChanged
@@ -120,7 +130,23 @@ namespace FvmAssistant
         /// <summary>While automation drives the page, the user's mouse and keyboard are not forwarded.</summary>
         public bool SuppressUserInput { get; set; }
 
-        public Bitmap CaptureFrame() => _browser.ScreenshotOrNull(PopupBlending.Blend);
+        internal bool RendererAvailable => _frameHealth.Available;
+        internal string RendererUnavailableReason => _frameHealth.FailureReason;
+        internal void RequireRenderer() => _frameHealth.RequireAvailable();
+
+        internal void RendererTerminated(string reason)
+        {
+            _frameHealth.Terminated(reason);
+            QueueRepaint();
+        }
+
+        public Bitmap CaptureFrame()
+        {
+            RequireRenderer();
+            var frame = _browser.ScreenshotOrNull(PopupBlending.Blend);
+            try { RequireRenderer(); return frame; }
+            catch { frame?.Dispose(); throw; }
+        }
 
         /// <summary>
         /// Records an injected move or click (page pixels) so the view can show where automation is
@@ -143,7 +169,11 @@ namespace FvmAssistant
             QueueRepaint();
         }
 
-        private void OnBrowserPaint(object sender, OnPaintEventArgs e) => QueueRepaint();
+        private void OnBrowserPaint(object sender, OnPaintEventArgs e)
+        {
+            _frameHealth.Painted(e.IsPopup);
+            QueueRepaint();
+        }
 
         private void QueueRepaint()
         {
@@ -165,6 +195,11 @@ namespace FvmAssistant
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            if (!RendererAvailable)
+            {
+                e.Graphics.Clear(BackColor);
+                return;
+            }
             using (var frame = _browser.ScreenshotOrNull(PopupBlending.Blend))
             {
                 if (frame == null)

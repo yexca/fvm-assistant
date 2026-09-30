@@ -29,8 +29,8 @@ windows to keep the two launches clear, and keep both FvmAssistant windows open:
 `partner` is only an example profile name. If the second account already uses a
 different profile, restart it with that **same** profile name to retain its login
 and learned cards. Never open the same profile in two processes. Log in manually,
-select the same game server on both accounts, and enter the game. Profiles keep
-cookies and learned card images separately under `%LOCALAPPDATA%\FvmAssistant\`;
+select the same game server on both accounts, and enter the game. New profiles keep
+cookies and learned card images separately under `.fvm-data/`;
 see [security](security.md) before sharing anything from there.
 
 Each profile must learn the card images that its own deck mapping names. In a
@@ -51,11 +51,11 @@ image in one profile does not make it available in the other.
 
 This example puts the partner character at `71` and fills column 6 with 小火炉.
 It was used in the live 曲奇 test and does not overlap the main preset's selected
-card cells. Create the file under private local application data from a third
+card cells. Create the file under the ignored project runtime directory from a third
 PowerShell window:
 
 ```powershell
-$guestTrack = Join-Path $env:LOCALAPPDATA 'FvmAssistant\edited-tracks\曲奇-小火炉辅助.txt'
+$guestTrack = Join-Path (Get-Location) '.fvm-data\accounts\partner\edited-tracks\曲奇-小火炉辅助.txt'
 [System.IO.Directory]::CreateDirectory((Split-Path -Parent $guestTrack)) | Out-Null
 $trackText = "人物1位置=71`n小火炉`t7[3]补极`t000|16`t000|26`t000|36`t000|46`t000|56`t000|66`t000|76`n"
 if ([System.IO.File]::Exists($guestTrack)) { throw 'The support track already exists; inspect it before reusing it.' }
@@ -70,6 +70,39 @@ and let the coordinator's preflight reject overlaps before starting.
 
 ## Pair manually and run
 
+The friend invitation path can pair two logged-in accounts from a lobby map on
+the same server. The host and guest are sent to the requested island and area;
+the host creates the stage room, invites the guest from a configured row of the
+online Friends list, and the guest accepts the prompt. The guest row is
+one-based and must identify the intended account. For 美味/神殿, area 11 and row 1
+were checked live.
+
+Two area-menu layouts have been observed: a sparse menu containing area 1
+followed by area 11, and a contiguous menu containing all eleven areas. The
+pairing script counts the visible gold row markers before resolving the
+requested area's row. It rejects other layouts; keep this attended and inspect
+the requested area afterward. `scripts/test-friend-pair.ps1` checks both layouts
+with synthetic images without opening the game. The host explicitly selects
+the Friends tab before using the configured friend row.
+
+To pair and then run one boss round:
+
+```powershell
+$guestTrack = Join-Path (Get-Location) '.fvm-data\accounts\<guest-profile>\tracks\神殿-小火炉-第5列.txt'
+.\scripts\duo.ps1 -HostPort 18765 -GuestPort 18766 -Level '美味/神殿' `
+    -FriendInvite -Area 11 -FriendRow 1 -Boss -Rounds 1 `
+    -HostTrack '通用轨道/6美味/7神殿.txt' -GuestTrack $guestTrack `
+    -HostCards '小火炉:日光炉,海星:红柳烤串机' -GuestCards '小火炉:小火炉'
+```
+
+This uses visible CEF clicks and captures. The invitation prompt is accepted
+only after the host sends it during this run. Room headers are compared before
+the coordinator starts either battle. A changed game layout or a friend who
+moves to another list row can stop pairing; inspect the two windows and update
+the area or row before retrying.
+
+### Already paired room
+
 With both accounts on the same server, have `main` create the 曲奇 room and
 `partner` join it manually. Confirm which account is the host. Leave both
 characters in the room; do not press Ready or Start. Close invitation dialogs and
@@ -83,7 +116,7 @@ uses 日光炉 for the preset's 小火炉 and 红柳烤串机 for 海星; the pa
 learned 小火炉 icon.
 
 ```powershell
-$guestTrack = Join-Path $env:LOCALAPPDATA 'FvmAssistant\edited-tracks\曲奇-小火炉辅助.txt'
+$guestTrack = Join-Path (Get-Location) '.fvm-data\accounts\partner\edited-tracks\曲奇-小火炉辅助.txt'
 .\scripts\duo.ps1 -HostPort 18765 -GuestPort 18766 `
     -HostTrack '通用轨道/6美味/1曲奇.txt' -GuestTrack $guestTrack `
     -HostCards '小火炉:日光炉,海星:红柳烤串机' `
@@ -114,14 +147,17 @@ To stop an active run on both accounts explicitly, use:
 ```
 
 `finished` with the requested `roundsDone` on **both** ports confirms the
-coordinated run completed. `Room` alone does not confirm a win. If a run stops,
+coordinated run completed. With `-Boss`, require `bossRoundsDone` on both ports
+as well. The coordinator waits for both victory prompts before releasing boss
+continuation. `Room` alone does not confirm a win. If a run stops,
 inspect the messages from each `/duo` response before retrying. Captures and
 logs may contain account names or room passwords; keep them outside the
 repository and redact them before sharing.
 
 The current two-account plan accepts ordinary layer-3 cards on disjoint cells,
 one distinct `人物1位置` per account, and a stage without a support-card layout.
-It rejects shovel actions and boss continuation. The room screen cannot prove
+It rejects shovel actions. Boss continuation can be requested with `-Boss`;
+it requires a usable key for the selected stage. The room screen cannot prove
 which stage was selected in manual mode, so verify the room yourself. Further
 execution details and the automatic-pairing design are in
 [automation behavior](automation.md#two-account-rooms).

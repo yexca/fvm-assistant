@@ -47,6 +47,7 @@ namespace FvmAssistant
         private readonly MainForm _form;
         private readonly AppPaths _paths;
         private readonly AssistantOptions _options;
+        internal readonly SemaphoreSlim OperationLock = new SemaphoreSlim(1, 1);
         private ScreenDetector _detector;
         private Dictionary<string, (int cooldown, int layer)> _cardDefaults;
         private CancellationTokenSource _cts;
@@ -77,9 +78,10 @@ namespace FvmAssistant
 
         public string PresetTrackDir => Path.Combine(TrackDir, "预制轨道");
 
-        /// <summary>Tracks made from recordings, under 预制轨道 so the panel lists and suggests them.</summary>
+        /// <summary>Tracks made from recordings belong to the current account.</summary>
         public const string UserTrackFolder = "我的轨道";
-        public string UserTrackDir => Path.Combine(PresetTrackDir, UserTrackFolder);
+        public string UserTrackDir => _paths.Tracks;
+        public string EditedTrackDir => _paths.EditedTracks;
 
         public IReadOnlyList<LevelEntry> Levels() =>
             LevelCatalog.Load(Path.Combine(TrackDir, "附加程序", "文本", "普通关卡.txt"));
@@ -117,7 +119,7 @@ namespace FvmAssistant
         public IReadOnlyList<string> SuggestTracks(LevelEntry level)
         {
             if (level == null || !Directory.Exists(PresetTrackDir)) return new List<string>();
-            return Directory.GetFiles(PresetTrackDir, "*.txt", SearchOption.AllDirectories)
+            var presets = Directory.GetFiles(PresetTrackDir, "*.txt", SearchOption.AllDirectories)
                 .Select(p => p.Substring(PresetTrackDir.Length + 1))
                 .Where(rel => Path.GetFileNameWithoutExtension(rel).Contains(level.Name) &&
                               (Path.GetDirectoryName(rel).EndsWith(level.Island) || IsUserTrack(rel)))
@@ -125,6 +127,12 @@ namespace FvmAssistant
                 .ThenBy(rel => rel.Contains('+') ? 1 : 0) // "+" files are 2P companions
                 .ThenBy(rel => rel)
                 .ToList();
+            var mine = Directory.GetFiles(UserTrackDir, "*.txt")
+                .Concat(Directory.GetFiles(EditedTrackDir, "*.txt"))
+                .Where(p => Path.GetFileNameWithoutExtension(p).Contains(level.Name))
+                .OrderBy(p => p).ToList();
+            mine.AddRange(presets);
+            return mine;
         }
 
         private static bool IsUserTrack(string relative) => relative.StartsWith(UserTrackFolder + "\\", StringComparison.OrdinalIgnoreCase);
@@ -178,7 +186,7 @@ namespace FvmAssistant
         public List<RecordedBattle> ReadRecording(string directory, Func<string, (int cooldown, int layer)?> cardDefaults = null) =>
             new RecordingReader(directory, Detector(), Cards, cardDefaults ?? CardDefaults).Read();
 
-        /// <summary>Saves a track under 预制轨道\我的轨道 and returns its path relative to 预制轨道.</summary>
+        /// <summary>Saves a generated track in this account's private track folder.</summary>
         public string SaveUserTrack(string name, string text, bool overwrite)
         {
             name = (name ?? "").Trim();
@@ -188,14 +196,46 @@ namespace FvmAssistant
             var path = Path.Combine(UserTrackDir, name + ".txt");
             if (File.Exists(path) && !overwrite) throw new IOException("已经有同名轨道：" + path);
             EditorText.WriteAllText(path, text);
-            return path.Substring(PresetTrackDir.Length + 1);
+            return path;
         }
 
         public async Task StartAsync(GrindRequest request)
         {
+            if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new InvalidOperationException("Another automation action is using this account.");
+            try { await StartCoreAsync(request).ConfigureAwait(false); }
+            finally { OperationLock.Release(); }
+        }
+
+        public async Task<MissionObservation> MissionActionAsync(string action, int rowY = 0, string listHash = null, string selectedHash = null)
+        {
+            if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new InvalidOperationException("Another automation action is using this account.");
+            bool reserved = false;
+            try
+            {
+                if (Running) throw new InvalidOperationException("Finish or stop the battle before handling missions.");
+                if (action != "inspect" && action != "publish" && action != "accept" && action != "claim")
+                    throw new ArgumentException("Mission state must be inspect, accept, claim or publish.");
+                var io = await CreateGameIoAsync().ConfigureAwait(false);
+                var templates = new TemplateLibrary();
+                templates.LoadDirectory(Path.Combine(TrackDir, "附加程序", "图片", "界面"));
+                _form.SetGrinding(true);
+                RunningChanged?.Invoke(true);
+                reserved = true;
+                return await new MissionActions(io, Detector(), templates, _paths.Captures)
+                    .ExecuteAsync(action, rowY, listHash, selectedHash).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (reserved) { _form.SetGrinding(false); RunningChanged?.Invoke(false); }
+                OperationLock.Release();
+            }
+        }
+
+        private async Task StartCoreAsync(GrindRequest request)
+        {
             if (Running) throw new InvalidOperationException("已经在刷图了");
-            if (request.DuoRole.HasValue && request.Boss)
-                throw new ArgumentException("Duo mode does not support boss continuation yet.");
             if (request.DuoRole.HasValue && !string.IsNullOrWhiteSpace(request.Level))
             {
                 if (!Regex.IsMatch(request.DuoPassword ?? "", "^[0-9]{4}$"))
@@ -310,7 +350,8 @@ namespace FvmAssistant
                 throw new InvalidOperationException("No duo run is active.");
             if (phase == "room") Duo.ReleaseRoom(runId, round, Current.RoundsDone + 1, Current.State);
             else if (phase == "battle") Duo.ReleaseBattle(runId, round, Current.RoundsDone + 1, Current.State);
-            else throw new ArgumentException("Duo phase must be room or battle.");
+            else if (phase == "boss") Duo.ReleaseBoss(runId, round, Current.RoundsDone + 1, Current.State);
+            else throw new ArgumentException("Duo phase must be room, battle or boss.");
         }
 
         public async Task StopAndWaitAsync(TimeSpan limit)

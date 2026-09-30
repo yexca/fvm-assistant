@@ -6,7 +6,7 @@ This repository is a Windows-only prototype for **美食大战老鼠**. Read `RE
 
 - The application is `src/FvmAssistant/`: WinForms, .NET Framework 4.8, x64, CefSharp 84.4.10. Build with `scripts/build.ps1` or `make build`, which uses Visual Studio MSBuild. Do not assume `dotnet build` is the supported path.
 - `vendor/` and `sample/` are local third-party material. Do not edit, stage, redistribute, or copy their contents into source files. `bin/` and `obj/` are generated output.
-- Runtime state is under `%LOCALAPPDATA%\FvmAssistant\`. Profiles hold login cookies; captures, recordings, and logs can identify an account or expose room passwords. Never move them into the repository or paste them into a report without redaction.
+- Runtime state is under the ignored `.fvm-data/` directory at the repository root. Profiles hold login cookies; captures, recordings, and logs can identify an account or expose room passwords. Never stage them or paste them into a report without redaction. The legacy `%LOCALAPPDATA%\FvmAssistant\` directory may still exist on older installations.
 - Preserve the off-screen capture and CEF input design. Do not introduce game-protocol automation or hard-coded account credentials.
 
 ## Work and verification

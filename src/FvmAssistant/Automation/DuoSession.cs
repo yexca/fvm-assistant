@@ -13,6 +13,7 @@ namespace FvmAssistant.Automation
         private readonly object _gate = new object();
         private int _roomReleased;
         private int _battleReleased;
+        private int _bossReleased;
         private DateTime _lastContactUtc = DateTime.UtcNow;
 
         public DuoSession(DuoRole role, int targetRoom = 0)
@@ -71,8 +72,19 @@ namespace FvmAssistant.Automation
             }
         }
 
+        public void ReleaseBoss(string runId, int round, int currentRound, string state)
+        {
+            lock (_gate)
+            {
+                Verify(runId, round, currentRound, state, "duo-boss-ready");
+                _bossReleased = round;
+                _lastContactUtc = DateTime.UtcNow;
+            }
+        }
+
         public bool RoomReleased(int round) { lock (_gate) return _roomReleased == round; }
         public bool BattleReleased(int round) { lock (_gate) return _battleReleased == round; }
+        public bool BossReleased(int round) { lock (_gate) return _bossReleased == round; }
 
         private void Verify(string runId, int round, int currentRound, string state, string requiredState)
         {

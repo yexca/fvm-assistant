@@ -26,13 +26,66 @@ On 2026-09-25, three consecutive 曲奇岛 normal-stage rounds succeeded from �
 4. Choose a round count and, if needed, boss continuation, shovel steps, and the account's automatic flame-pickup setting. Start the loop. The game view ignores manual mouse and keyboard input while automation is active; Stop ends it.
 5. Use the recorder to capture a manually played round for debugging or track generation. It records mouse actions and frames, not keyboard input.
 
-The red crosshair is the automation pointer shown only in the UI. During automation or recording, the page keeps its starting size; resizing the window can crop or add blank space but does not shift stage coordinates. For the `main` profile, panel settings are in `%LOCALAPPDATA%\FvmAssistant\panel.json`; learned icons are in `cards\` and run logs/captures are in `captures\grind-*`. Treat all of these as private.
+The red crosshair is the automation pointer shown only in the UI. During automation or recording, the page keeps its starting size; resizing the window can crop or add blank space but does not shift stage coordinates. For the `main` profile, panel settings are in `.fvm-data\panel.json`; learned icons are in `.fvm-data\cards\` and run logs/captures are in `.fvm-data\captures\grind-*`. Treat all of these as private.
 
 The game can center the stage at a half pixel when page width is odd. Stage positioning rounds that edge upward to match Chromium. Older recordings can be corrected by one pixel during track conversion. If a battle frame stops changing for five seconds, the application asks the browser to redraw; after 20 seconds without placing a card it logs card-slot diagnostics.
 
-Other profiles store their panel settings, learned cards, captures, and logs under `%LOCALAPPDATA%/FvmAssistant/accounts/<profile>/`. Browser cookies and Flash storage remain under `profiles/<profile>/`. A second process cannot open the same profile at the same time.
+Other profiles store their panel settings, learned cards, captures, logs, generated tracks, and edited copies under `.fvm-data/accounts/<profile>/`. Browser cookies and Flash storage are under `.fvm-data/profiles/<profile>/`. A second process cannot open the same profile at the same time.
+
+## Independent controller
+
+Run `FvmAssistant.exe --mode controller` from the Debug or Release output, or open the executable without arguments. This window does not initialize CEF. The `账号` tab stores a profile name, control port, server number or label, and entry URL. On the current 4399 portal, a numeric server such as `<server-number>` is selected by locating the visible number field and `进入` control, then sending CEF mouse and key events. A direct server URL can also be used. If the page layout changes and those controls cannot be found, the controller stops and asks for manual selection. It does not inspect cookies or Flash storage. Account card icons can be listed or removed there, and new icons can be learned from an open room deck. The `轨道` tab previews tracks, creates edited copies, and keeps success markers per account, stage and track.
+
+The controller UI uses Chinese labels and four tabs: `账号`, `轨道`, `关卡队列`, and `双人任务`. Each list sits beside its settings and actions. Choosing `加入关卡队列` on a track carries its path, account, and entered stage to the queue tab. The bottom panel shows task output and provides a stop control and a shortcut to the private runtime directory.
+
+The `关卡队列` tab stores several stage runs for one account and uses the same `scripts/queue.ps1` preflight and sequencing as a manual plan. If a queue request starts a closed account window, the controller waits up to 90 seconds for a recognized rendered game screen. Failure asks the user to log in and select a server; it does not try to read or interpret saved login state. Success markers are set after the coordinator exits successfully. The `双人任务` tab runs `scripts/duo.ps1` with each account's track and card mapping, and can synchronize optional boss continuation. Friend invitation pairing uses the visible island area selector and the configured row of the host's online Friends list, then accepts the guest's timed prompt. Both windows must be at a lobby map on the same server before it starts. Manual room mode still requires both windows to be paired on the same server before starting; room-number pairing with a stage is experimental as described below.
+
+Account cleanup is available only after its game window closes. The dialog can delete that account's recordings/captures, logs, generated tracks, and known CEF resource-cache folders independently. It preserves login storage, learned cards, and edited track copies. Legacy generated tracks in `vendor/track/预制轨道/我的轨道/` and legacy edited tracks are not included because their account ownership is unknown.
 
 ## Local control API
+
+### Guild publication and mission rewards
+
+The off-screen panel includes **Publish guild-leader tasks** and **Claim selected task reward**.
+Publication navigates the visible guild activity menu, draws once, and verifies that publication
+is disabled afterward. An already-disabled publication button causes no draw. This uses local
+image templates and CEF input, never game-protocol requests. Start from town or an open guild
+task board; an unrecognized screen stops the action. Publication requires the account's guild
+permissions and must be done before the game's daily deadline.
+
+Mission handling is attended, not an autonomous task scanner or quest-to-stage planner.
+Open the relevant board, inspect its private capture, and use the observed row coordinate.
+Always collect completed rewards before accepting newly unlocked tasks. A task is accepted
+only after clicking its row and verifying **任务进行中**; a victory alone is not proof that a
+mission was completed. Claiming verifies **已领取** or a changed, no-longer-claimable task pane.
+Do not repeat an uncertain claim or draw without inspecting the current state.
+
+```powershell
+$before = .\scripts\assistant.ps1 '/missions?state=inspect' | ConvertFrom-Json
+.\scripts\assistant.ps1 ('/missions?state=claim&selectedHash=' + $before.SelectedHash)
+$before = .\scripts\assistant.ps1 '/missions?state=inspect' | ConvertFrom-Json
+.\scripts\assistant.ps1 ('/missions?state=accept&row=173&listHash=' + $before.ListHash)
+.\scripts\assistant.ps1 '/guild-tasks?state=publish'
+```
+
+Replace the example row with a row observed in the latest capture. Hashes guard the selected
+pane and visible list against reordering or other intervening changes.
+The list guard hashes stable white/yellow label ink instead of animated category
+backgrounds or status badges. Pending rewards and the accepted row's active badge
+remain independent checks; selected reward-pane evidence still uses its full image.
+Acceptance refuses visible completed rewards; it does not prove that rewards in collapsed categories or outside
+the current viewport have been collected. Review all categories first. Party, guild-member,
+ranking, restricted-deck, consumable and specific-card requirements need manual eligibility
+review; unsupported preset requirements are not bypassed. Mission actions and grind startup
+share an account operation lock, and manual pointer API input is rejected during automation.
+The Stop button remains the battle stop control; short mission actions have bounded waits.
+
+Private mission captures stay under the account's ignored captures directory. For local text
+diagnostics, `scripts/read-game-text.ps1 -Image <private capture> -X <x> -Y <y> -Width <w> -Height <h>`
+uses Windows PowerShell and the installed Simplified Chinese Windows OCR language. No cloud
+OCR or SDK installation is required. OCR can misread outlined fonts and is not used as
+authority for automatic stage selection. `-Ink orange` filters objective text; `-Ink list` and
+`-Ink status` are optional diagnostic filters. Keep OCR output private as well.
 
 The API is loopback-only and intended for local scripts. Examples (run from the repository root):
 
@@ -203,9 +256,9 @@ scheduled-fill event. Undo and redo operate on the in-memory copy. The preview
 button shows the edited board and timeline, while the diagnostic box reports
 whether the opening plan can run with the selected stage's support layout.
 
-`另存副本…` writes a new UTF-8 file under
-`%LOCALAPPDATA%\FvmAssistant\edited-tracks\` and loads that absolute path in the
-operation panel. The imported preset is never overwritten. Choose a new filename
+`另存副本…` writes a new UTF-8 file under the current account's
+`.fvm-data/edited-tracks/` or `.fvm-data/accounts/<profile>/edited-tracks/`.
+It loads that absolute path in the operation panel. The imported preset is never overwritten. Choose a new filename
 for each saved version; an existing file is not replaced. Source lines outside the
 edited card rows are preserved, including headers and later waves. The
 editor does not create or execute later-wave behavior, and the compatibility
@@ -214,7 +267,7 @@ review them before sharing.
 
 ## Recording a track
 
-In a room, build a deck with learned cards, start recording, play a round manually, then stop recording and use “generate track from latest recording.” By default it saves under `vendor\track\预制轨道\我的轨道\<stage>-<time>.txt`; because `vendor/` is ignored, generated tracks remain local. The API route `/record-track?save=<name>` also generates a track; without `save`, it returns parsed data and track text only.
+In a room, build a deck with learned cards, start recording, play a round manually, then stop recording and use “generate track from latest recording.” It saves under the current account's `.fvm-data/tracks/` or `.fvm-data/accounts/<profile>/tracks/`. The API route `/record-track?save=<name>` also generates a track; without `save`, it returns parsed data and track text only. These generated files can be removed by the per-account cleanup dialog.
 
 `RecordingReader` takes the last room deck before Start and matches learned 42×50 icons. It interprets a card-slot click followed by a grid click as a placement, checks the frame at mouse-down, looks at neighboring cells near grid borders, and confirms visible changes for up to 5 seconds (with a longer fallback window). A repeated grid click within four seconds can be the same card's retry. It deduplicates card/cell pairs and writes a UTF-8 preset track, using known layer/cooldown values where possible. A recording with several rounds uses the round with the most placements.
 
@@ -223,6 +276,21 @@ Generated tracks encode placement order and cells, but not wave-dependent format
 Newly generated shovel rows include `独` because recording times use elapsed battle
 time. Older generated files are unchanged; a timed shovel row without `独` uses
 synchronized track time when shovels are enabled.
+
+## Renderer-loss safety
+
+In off-screen mode, a renderer termination invalidates capture and input even
+when CEF still exposes an initialized browser and a cached screenshot.
+`/status` reports `browserReady=false`, `rendererReady=false`, the termination
+reason, and no cached Flash location. The viewer clears the old image; capture,
+manual input, and automation fail closed rather than recognizing that image
+as a live game screen.
+
+Reload or reopen the page manually after checking the failure and available
+memory. Recovery needs a new main-frame navigation after the failure, successful
+load completion, and a subsequent viewport paint. A late callback or popup-only
+paint cannot restore readiness. This guard does not resume stopped battles,
+restart queues, or establish that an out-of-memory root cause has been fixed.
 
 ## Track and board rules
 

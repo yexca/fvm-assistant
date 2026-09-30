@@ -15,6 +15,8 @@ namespace FvmAssistant.Automation
         Battle,
         /// <summary>After the normal stage: 继续作战 (boss, costs a key) / 领取奖品.</summary>
         VictoryDialog,
+        /// <summary>The guest's dialog while the room host chooses reward or boss continuation.</summary>
+        AwaitHostDecision,
         /// <summary>"胜利" banner with the loot bar; transitions by itself.</summary>
         Loot,
         Settlement,
@@ -100,6 +102,7 @@ namespace FvmAssistant.Automation
 
         public GameScreen Detect(StageFrame frame)
         {
+            if (AwaitingHostDecision(frame)) return GameScreen.AwaitHostDecision;
             foreach (var (screen, all) in Rules)
             {
                 bool match = screen == GameScreen.RoomList
@@ -108,6 +111,21 @@ namespace FvmAssistant.Automation
                 if (match) return screen;
             }
             return GameScreen.Unknown;
+        }
+
+        /// <summary>Recognize the guest-only blue decision overlay without storing an account capture.</summary>
+        private static bool AwaitingHostDecision(StageFrame frame)
+        {
+            if (frame.Width < 700 || frame.Height < 370) return false;
+            bool Blue(int x, int y)
+            {
+                int i = (y * frame.Width + x) * 4;
+                return frame.Bgra[i] > 175 && frame.Bgra[i + 1] > 125 &&
+                    frame.Bgra[i] > frame.Bgra[i + 2] + 25;
+            }
+            int white = (350 * frame.Width + 500) * 4;
+            return Blue(475, 290) && Blue(630, 225) &&
+                frame.Bgra[white] > 235 && frame.Bgra[white + 1] > 235 && frame.Bgra[white + 2] > 235;
         }
 
         /// <summary>How far right of its 曲奇岛 position the room list dialog is, or null when it is not showing.</summary>

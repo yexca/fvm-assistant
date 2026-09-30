@@ -1,12 +1,12 @@
 # Sensitive information review policy
 
-The game browser persists login state. `%LOCALAPPDATA%\FvmAssistant\profiles\` contains cookies and Flash/browser storage. The `main` profile keeps its captures, recordings, card images, settings, and logs directly under `%LOCALAPPDATA%\FvmAssistant\`; other profiles keep these under `accounts\<profile>\`. Saved track copies and manually created support tracks may live under `edited-tracks\`. Captures and logs can show account names, room passwords, or other private game data. Keep the entire runtime directory outside the repository and do not share it wholesale.
+The game browser persists login state. New runtime state is in the ignored repository-root `.fvm-data/` directory. Its `profiles/` folder contains cookies and Flash/browser storage. The `main` profile keeps captures, recordings, card images, generated tracks, settings, and logs directly under `.fvm-data/`; other profiles keep these under `accounts/<profile>/`. Edited track copies live in each account's `edited-tracks/` folder. Controller metadata is in `controller.json`. Captures and logs can show account names, room passwords, or other private game data. Never stage or share the runtime directory wholesale. The previous `%LOCALAPPDATA%\FvmAssistant\` location is not migrated or removed by the application.
 
 ## What may enter Git
 
 Source code, documentation, small source-owned UI templates, the local Flash test page, and build/check scripts may be staged after review. `vendor/`, `sample/`, `bin/`, and `obj/` must remain local. The Flash DLL and track editor package/data are third-party material and are intentionally ignored. Do not force-add them. Also exclude credentials, private keys, `.env` files, profile data, captures, recordings, and logs.
 
-The `.gitignore` prevents ordinary accidental staging. `scripts/check-secrets.ps1` checks both forbidden paths and high-confidence token formats. `make secrets` scans tracked plus untracked, non-ignored working files. `make check-staged` reads the exact Git index blobs, including staged versions that differ from the working tree. The repository-local `.githooks/pre-commit` runs the staged check when enabled with `make install-hooks` (equivalent to `git config --local core.hooksPath .githooks`). The hook is a local guardrail; it does not install itself on other clones.
+The `.gitignore` excludes `.fvm-data/` from ordinary staging. `scripts/check-secrets.ps1` checks both forbidden paths and high-confidence token formats. `make secrets` scans tracked plus untracked, non-ignored working files. `make check-staged` reads the exact Git index blobs, including staged versions that differ from the working tree. The repository-local `.githooks/pre-commit` runs the staged check when enabled with `make install-hooks` (equivalent to `git config --local core.hooksPath .githooks`). The hook is a local guardrail; it does not install itself on other clones.
 
 ## Review before staging or sharing
 

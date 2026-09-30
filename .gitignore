@@ -23,6 +23,7 @@ sample/
 *secrets*.json
 
 # Runtime data, if copied into this checkout
+.fvm-data/
 profiles/
 captures/
 recordings/

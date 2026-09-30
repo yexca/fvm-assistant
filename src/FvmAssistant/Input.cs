@@ -26,6 +26,24 @@ namespace FvmAssistant
             host.SendMouseClickEvent(x, y, MouseButtonType.Left, true, 1, CefEventFlags.None);
         }
 
+        /// <summary>Replace a focused HTML text field using browser key events, without system focus.</summary>
+        public static async Task ReplaceCefTextAsync(IBrowserHost host, string text)
+        {
+            host.SendFocusEvent(true);
+            host.SendKeyEvent(new KeyEvent { Type = KeyEventType.RawKeyDown, WindowsKeyCode = 17, Modifiers = CefEventFlags.ControlDown });
+            host.SendKeyEvent(new KeyEvent { Type = KeyEventType.RawKeyDown, WindowsKeyCode = 65, Modifiers = CefEventFlags.ControlDown });
+            host.SendKeyEvent(new KeyEvent { Type = KeyEventType.KeyUp, WindowsKeyCode = 65, Modifiers = CefEventFlags.ControlDown });
+            host.SendKeyEvent(new KeyEvent { Type = KeyEventType.KeyUp, WindowsKeyCode = 17 });
+            foreach (char ch in text)
+            {
+                int vk = char.ToUpperInvariant(ch);
+                host.SendKeyEvent(new KeyEvent { Type = KeyEventType.RawKeyDown, WindowsKeyCode = vk });
+                host.SendKeyEvent(new KeyEvent { Type = KeyEventType.Char, WindowsKeyCode = ch });
+                await Task.Delay(40).ConfigureAwait(false);
+                host.SendKeyEvent(new KeyEvent { Type = KeyEventType.KeyUp, WindowsKeyCode = vk });
+            }
+        }
+
         public static void MovePost(IntPtr hwnd, int x, int y) =>
             Native.PostMessage(hwnd, Native.WM_MOUSEMOVE, IntPtr.Zero, Native.MakeLParam(x, y));
 

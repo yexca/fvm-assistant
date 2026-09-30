@@ -5,7 +5,7 @@ using System.Text;
 
 namespace FvmAssistant.Panel
 {
-    /// <summary>What the operation panel remembers between runs (%LOCALAPPDATA%\FvmAssistant\panel.json).</summary>
+    /// <summary>What the operation panel remembers between runs in its account's panel.json.</summary>
     internal sealed class PanelSettings
     {
         public string Level { get; set; } = "美味/曲奇";
