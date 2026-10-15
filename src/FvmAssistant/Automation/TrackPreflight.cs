@@ -122,6 +122,15 @@ namespace FvmAssistant.Automation
             foreach (var card in active)
             {
                 var original = Track.Opening.Cards.First(c => c.Name == card.Name && c.SourceLine == card.SourceLine);
+                if (card.RequiresBareWater)
+                {
+                    var targets = new HashSet<Cell>(card.FormationCells);
+                    if (Carriers != null && (Carriers.Clouds || targets.Any(c => !Carriers.Cells.Contains(c))))
+                        Add("bare-water-cell", original, "This card requires a bare water cell in the selected stage layout.");
+                    if (active.Where(c => c != card && (c.Layer == 1 || c.Layer == 3))
+                        .Any(c => c.FormationCells.Any(targets.Contains)))
+                        Add("bare-water-conflict", original, "Another selected card or support occupies this bare water target.");
+                }
                 if (card != original) Add("support-inherited", original,
                     (original.Steps.Count == 0 ? "Resolved default support steps from " :
                         "Resolved default timing over explicit support cells from ") + Carriers.Source + ".", "info");

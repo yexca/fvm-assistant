@@ -10,7 +10,8 @@ param(
     [Parameter(Mandatory)][int]$GuestPort,
     [Parameter(Mandatory)][string]$Level,
     [ValidateRange(1, 11)][int]$Area = 11,
-    [ValidateRange(1, 10)][int]$FriendRow = 1
+    [ValidateRange(1, 10)][int]$FriendRow = 1,
+    [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,6 +90,54 @@ function Region-Diff([string]$First, [string]$Second, [int]$Left, [int]$Top, [in
     finally { $a.Dispose(); $b.Dispose() }
 }
 
+function Test-RoomHeaderMatch([string]$First, [string]$Second) {
+    $a = [System.Drawing.Bitmap]::new($First)
+    $b = [System.Drawing.Bitmap]::new($Second)
+    try {
+        if ($a.Width -lt 182 -or $b.Width -lt 182 -or $a.Height -lt 41 -or $b.Height -lt 41) { return $false }
+        [long]$sum = 0
+        # Exclude the adjacent adventure button and the announcement strip through y=24.
+        # Compare every pixel of the room label instead, including thin digit strokes.
+        for ($py = 25; $py -lt 41; $py++) {
+            for ($px = 121; $px -lt 182; $px++) {
+                $ca = $a.GetPixel($px, $py)
+                $cb = $b.GetPixel($px, $py)
+                $sum += [math]::Abs([int]$ca.R - [int]$cb.R) +
+                    [math]::Abs([int]$ca.G - [int]$cb.G) +
+                    [math]::Abs([int]$ca.B - [int]$cb.B)
+            }
+        }
+        return ($sum / (3.0 * 61 * 16)) -le 0.75
+    }
+    finally { $a.Dispose(); $b.Dispose() }
+}
+
+function Hide-ActivityBar([int]$Port) {
+    # One-row and hidden states expose the same map beneath the second row.
+    $seen = @((Capture $Port))
+    for ($index = 0; $index -lt 2; $index++) {
+        Click $Port 787 25
+        [void](Request $Port '/move?x=940&y=300&space=flash&method=cef')
+        Start-Sleep -Milliseconds 700
+        $seen += Capture $Port
+    }
+    $matches = @()
+    for ($index = 0; $index -lt 3; $index++) {
+        $difference = Region-Diff $seen[$index] $seen[(($index + 1) % 3)] 270 60 490 52
+        if ($difference -lt 12) { $matches += $index }
+    }
+    if ($matches.Count -ne 1) {
+        throw 'The activity bar state is ambiguous. Inspect it before selecting a covered stage.'
+    }
+    $hidden = ($matches[0] + 1) % 3
+    $presses = ($hidden + 1) % 3
+    for ($index = 0; $index -lt $presses; $index++) {
+        Click $Port 787 25
+        [void](Request $Port '/move?x=940&y=300&space=flash&method=cef')
+        Start-Sleep -Milliseconds 700
+    }
+}
+
 $parts = $Level -split '[/\\]'
 if ($parts.Count -ne 2) { throw 'Level must be 岛/关卡, for example 美味/神殿.' }
 $island = $parts[0].Trim()
@@ -121,7 +170,7 @@ foreach ($port in @($HostPort, $GuestPort)) {
         Start-Sleep -Milliseconds 500
     }
     if ((Screen $port) -ne 'Lobby') { throw "Port $port must be at a lobby map before friend pairing." }
-    Click $port 866 41
+    Click $port 866 58
     Wait-Screen $port 'WorldMap' 15
     Click $port $islandPoint[0] $islandPoint[1]
     Wait-Screen $port 'Lobby' 15
@@ -140,9 +189,13 @@ $guestArea = Capture $GuestPort
 if ((Region-Diff $hostArea $guestArea 838 75 55 18) -gt 8) {
     throw 'The two accounts do not show the same island area label.'
 }
-Write-Host "Both accounts reached $island area $Area."
+Write-Host "Both accounts show matching $island area labels."
 
 $guestBefore = $guestArea
+if ($stagePoint[0] -ge 255 -and $stagePoint[0] -lt 815 -and
+    $stagePoint[1] -ge 0 -and $stagePoint[1] -lt 130) {
+    Hide-ActivityBar $HostPort
+}
 Click $HostPort $stagePoint[0] $stagePoint[1]
 Wait-Screen $HostPort 'RoomList' 15
 # Room lists with side tabs, including 神殿, sit 20 pixels to the right.
@@ -153,6 +206,10 @@ Click $HostPort 408 547
 Start-Sleep -Milliseconds 350
 Click $HostPort 529 130
 Start-Sleep -Milliseconds 350
+if ($PrepareOnly) {
+    [pscustomobject]@{ state = 'prepared'; capture = (Capture $HostPort) } | ConvertTo-Json
+    return
+}
 Click $HostPort 601 (154 + 26 * ($FriendRow - 1))
 
 $deadline = [DateTime]::UtcNow.AddSeconds(11)
@@ -171,9 +228,16 @@ Wait-Screen $GuestPort 'Room' 10
 Click $HostPort 588 490
 Start-Sleep -Milliseconds 400
 if ((Screen $HostPort) -ne 'Room') { throw 'The host left the room unexpectedly.' }
-$hostRoom = Capture $HostPort
-$guestRoom = Capture $GuestPort
-if ((Region-Diff $hostRoom $guestRoom 121 20 210 24) -gt 15) {
+$roomMatchDeadline = [DateTime]::UtcNow.AddSeconds(5)
+$matchingFrames = 0
+while ([DateTime]::UtcNow -lt $roomMatchDeadline -and $matchingFrames -lt 2) {
+    $hostRoom = Capture $HostPort
+    $guestRoom = Capture $GuestPort
+    if (Test-RoomHeaderMatch $hostRoom $guestRoom) { $matchingFrames++ }
+    else { $matchingFrames = 0 }
+    if ($matchingFrames -lt 2) { Start-Sleep -Milliseconds 350 }
+}
+if ($matchingFrames -lt 2) {
     throw 'The room headers differ after the invitation; do not start the duo run.'
 }
 Write-Host 'The guest accepted the invitation and both accounts show the same room header.'

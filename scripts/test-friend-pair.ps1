@@ -5,7 +5,7 @@ $tokens = $null
 $syntax = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw 'The pairing script has syntax errors.' }
 Add-Type -AssemblyName System.Drawing
-foreach ($name in 'Resolve-AreaMenuRow', 'Get-AreaMenuRowCount') {
+foreach ($name in 'Resolve-AreaMenuRow', 'Get-AreaMenuRowCount', 'Test-RoomHeaderMatch') {
     $resolver = $syntax.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true)
@@ -38,4 +38,27 @@ foreach ($rowCount in 0, 1, 2, 3, 11) {
     }
     finally { $brush.Dispose(); $graphics.Dispose(); $image.Dispose() }
 }
-Write-Output 'Friend pairing sparse and contiguous area-menu regressions passed.'
+$roomImage = [System.Drawing.Bitmap]::new(950, 596)
+$roomGraphics = [System.Drawing.Graphics]::FromImage($roomImage)
+$tempFirst = Join-Path ([IO.Path]::GetTempPath()) (([guid]::NewGuid().ToString('N')) + '.png')
+$tempSecond = Join-Path ([IO.Path]::GetTempPath()) (([guid]::NewGuid().ToString('N')) + '.png')
+try {
+    $roomGraphics.Clear([System.Drawing.Color]::Black)
+    $roomGraphics.FillRectangle([System.Drawing.Brushes]::White, 151, 25, 27, 12)
+    $roomImage.Save($tempFirst)
+    $roomGraphics.FillRectangle([System.Drawing.Brushes]::White, 189, 20, 142, 24)
+    $roomImage.Save($tempSecond)
+    if (-not (Test-RoomHeaderMatch $tempFirst $tempSecond)) { throw 'The adventure button must not affect room matching.' }
+    $roomGraphics.FillRectangle([System.Drawing.Brushes]::White, 121, 0, 61, 25)
+    $roomImage.Save($tempSecond)
+    if (-not (Test-RoomHeaderMatch $tempFirst $tempSecond)) { throw 'The announcement strip must not affect room matching.' }
+    $roomGraphics.FillRectangle([System.Drawing.Brushes]::Black, 174, 25, 2, 12)
+    $roomImage.Save($tempSecond)
+    if (Test-RoomHeaderMatch $tempFirst $tempSecond) { throw 'A changed room digit must reject pairing.' }
+}
+finally {
+    $roomGraphics.Dispose()
+    $roomImage.Dispose()
+    foreach ($path in $tempFirst, $tempSecond) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path } }
+}
+Write-Output 'Friend pairing area-menu and room-header regressions passed.'

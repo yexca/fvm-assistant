@@ -31,6 +31,10 @@ namespace FvmAssistant.Automation
         private static readonly TimeSpan OffBattleGrace = TimeSpan.FromSeconds(4);
         private static readonly TimeSpan OwnCardMemory = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan RefusedCellMemory = TimeSpan.FromSeconds(30);
+        // Fixed support maps can contain cells that look valid but reject this account's
+        // carrier on the current stage. Give those cells time to change before probing again;
+        // they remain retryable rather than being disabled for the whole battle.
+        private static readonly TimeSpan RefusedSupportCellMemory = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan ProbeRetry = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PresenceInterval = TimeSpan.FromMilliseconds(250);
@@ -286,7 +290,7 @@ namespace FvmAssistant.Automation
             // empty cells where no carrier goes.
             var carrierFormation = new HashSet<Cell>(_plans.Where(p => p.Card.Layer == 1)
                 .SelectMany(p => p.Card.Steps.Where(s => s.HasCell && (p.Fill || p.Card.Extreme || s.TimeSec == 0)).Select(s => s.Cell)));
-            var cardFormation = new HashSet<Cell>(_plans.Where(p => p.Card.Layer != 1 && p.Card.Layer != 2)
+            var cardFormation = new HashSet<Cell>(_plans.Where(p => p.Card.Layer != 1 && p.Card.Layer != 2 && !p.Card.RequiresBareWater)
                 .SelectMany(p => p.Card.FormationCells));
             _cardsFall = carrierMap?.Clouds ?? _plans.Any(p => p.Card.Layer == 1 && CarrierMap.IsCloudCarrier(p.Card.Name));
             _mapCarrierCells = new HashSet<Cell>(carrierMap?.Cells.Where(c => cardFormation.Contains(c) && !carrierFormation.Contains(c)) ?? Enumerable.Empty<Cell>());
@@ -959,7 +963,8 @@ namespace FvmAssistant.Automation
                 }
 
                 FailedAttempts++;
-                plan.BusyUntil[cell] = DateTime.UtcNow + RefusedCellMemory;
+                plan.BusyUntil[cell] = DateTime.UtcNow +
+                    (card.Layer == 1 ? RefusedSupportCellMemory : RefusedCellMemory);
                 if (outcome == Placement.Dropped)
                 {
                     Drops++;

@@ -111,20 +111,22 @@ namespace FvmAssistant.Automation
 
         public Bitmap ToBitmap()
         {
-            var bmp = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
-            var data = bmp.LockBits(new Rectangle(0, 0, Width, Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-            try
+            using (var bmp = new Bitmap(Width, Height, PixelFormat.Format32bppArgb))
             {
-                int rowBytes = Width * 4;
-                for (int y = 0; y < Height; y++)
-                    Marshal.Copy(Bgra, y * rowBytes, data.Scan0 + y * data.Stride, rowBytes);
+                var data = bmp.LockBits(new Rectangle(0, 0, Width, Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    int rowBytes = Width * 4;
+                    for (int y = 0; y < Height; y++)
+                        Marshal.Copy(Bgra, y * rowBytes, data.Scan0 + y * data.Stride, rowBytes);
+                }
+                finally
+                {
+                    bmp.UnlockBits(data);
+                }
+                // Frames come from an opaque page; force alpha so saved PNGs are not transparent.
+                return bmp.Clone(new Rectangle(0, 0, Width, Height), PixelFormat.Format24bppRgb);
             }
-            finally
-            {
-                bmp.UnlockBits(data);
-            }
-            // Frames come from an opaque page; force alpha so saved PNGs are not transparent.
-            return bmp.Clone(new Rectangle(0, 0, Width, Height), PixelFormat.Format24bppRgb);
         }
     }
 }

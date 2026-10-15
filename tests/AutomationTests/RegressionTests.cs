@@ -40,6 +40,9 @@ namespace FvmAssistant.Tests
                 Test("mission state distinguishes active, complete, claimed and unknown", MissionStates);
                 Test("mission list identity survives header animation but rejects moved labels", MissionListAnimation);
                 Test("mission actions require fresh evidence and verify claim and acceptance", MissionGuards);
+                Test("transition polling updates the reported screen before resuming a boss", TransitionScreenStatus);
+                Test("recognized victory and notices outrank the guest-choice pixel heuristic", GuestChoicePrecedence);
+                Test("finish after round preserves boss continuation and free rewards without starting another battle", FinishRoundRewards);
                 Test("guild publication retains its transient submenu and draws only once", GuildPublication);
                 Test("late first attempt gets retries and future events remain reachable", TimedRetries);
                 Test("completed events stay complete when a late rejection is restored", LateSchedule);
@@ -64,6 +67,8 @@ namespace FvmAssistant.Tests
                 Test("synchronized timing pauses for ordinary placements", SynchronizedTiming);
                 Test("track card rate limit accepts only the declared attempt cadence", PlantSpeed);
                 Test("step editor preserves source lines and supports undo, redo and copy save", TrackEditing);
+                Test("room scrolling waits for a delayed rendered list before declaring its end", DeckScrollDelay);
+                Test("late remembered room decks rebuild once and never start with extra cards", DelayedRoomDeck);
                 Test("track editor and board preview construct on a WinForms UI thread", TrackEditorUi);
                 Test("effective deck includes inherited and fixed support across stage changes", EffectiveSupportDeck);
                 Test("malformed support data cannot bypass preflight", InvalidSupportData);
@@ -72,6 +77,9 @@ namespace FvmAssistant.Tests
                 Test("generated tracks retain elapsed shovel timing and pass preflight", GeneratedCompatibility);
                 Test("duo commands reject stale runs and out-of-order gates", DuoGates);
                 Test("duo preflight enforces disjoint ordinary formations", DuoPlans);
+                Test("duo fixed bursts retain target guards and reject timed or unsupported actions", DuoFixedBursts);
+                Test("duo fixed support stays within each account's cells and rejects timed layouts", DuoFixedCarriers);
+                Test("bare water attacks never request a plate and reject covered or land targets", BareWaterAttacks);
                 Test("local room masks read a stable room ID and find only its list entry", RoomNumbers);
                 Test("controller keeps account track markers separate and runtime local", ControllerIsolation);
                 Test("portal selection pairs the visible server field and Enter control", PortalControls);
@@ -531,6 +539,97 @@ namespace FvmAssistant.Tests
             Check(rejected, "The editor cannot replace a source outside its private output folder");
         }
 
+        private static void DeckScrollDelay()
+        {
+            var io = new DelayedScrollIo
+            {
+                Before = Frame(Color.Black),
+                After = Frame(Color.Black, bitmap =>
+                {
+                    using (var graphics = Graphics.FromImage(bitmap)) graphics.FillRectangle(Brushes.White, 400, 190, 42, 50);
+                })
+            };
+            var builder = new DeckBuilder(io, _ => { }, _ => true);
+            bool moved = ((Task<bool>)Call(builder, "ScrollListAsync", new Point(929, 400), 1, CancellationToken.None))
+                .GetAwaiter().GetResult();
+            Check(moved && io.Polls >= 3 && io.Clicks == 1,
+                "Delayed frames must not be mistaken for a list boundary or cause repeated unobserved clicks");
+            var still = new MissionIo { Current = io.Before };
+            builder = new DeckBuilder(still, _ => { }, _ => true);
+            Check(!((Task<bool>)Call(builder, "ScrollListAsync", new Point(929, 400), 2, CancellationToken.None))
+                .GetAwaiter().GetResult() && still.Clicks == 1,
+                "A genuinely unchanged list must stop after a bounded observation window");
+        }
+
+        private static void DelayedRoomDeck()
+        {
+            var icon = Frame(Color.Cyan).Crop(new Rectangle(0, 0, 42, 50));
+            var cards = new List<(string name, StageFrame icon)> { ("Card", icon) };
+            var messages = new List<string>();
+            var io = new RememberedDeckIo();
+            new DeckBuilder(io, messages.Add, _ => true).EnsureAsync(cards, CancellationToken.None).GetAwaiter().GetResult();
+            Check(DeckBuilder.DeckMatches(io.Grab(), new[] { icon }) && io.Selections == 2 && io.Removals == 2,
+                "Late existing cards must be cleared before rebuilding the exact requested deck");
+            Check(messages.Count(m => m.Contains("rebuilding once")) == 1, "A delayed room deck must use only one rebuild");
+            io = new RememberedDeckIo { RepeatRace = true };
+            bool refused = false;
+            try { new DeckBuilder(io, _ => { }, _ => true).EnsureAsync(cards, CancellationToken.None).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { refused = true; }
+            Check(refused && io.Selections == 2 && !DeckBuilder.DeckMatches(io.Grab(), new[] { icon }),
+                "Repeated unexpected deck changes must stop after one retry, preserving the exact-deck guard");
+        }
+
+        private sealed class RememberedDeckIo : IGameIo
+        {
+            private readonly Color?[] _slots = new Color?[DeckBuilder.DeckSlots];
+            internal int Selections, Removals;
+            internal bool RepeatRace;
+            public StageFrame Grab() => Frame(Color.FromArgb(30, 55, 90), bitmap =>
+            {
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    for (int i = 0; i < 11; i++)
+                        graphics.FillRectangle(i == 0 ? Brushes.Cyan : Brushes.Orange, 386 + 49 * i, 178, 42, 50);
+                    for (int i = 0; i < _slots.Length; i++)
+                        if (_slots[i].HasValue)
+                            using (var brush = new SolidBrush(_slots[i].Value))
+                                graphics.FillRectangle(brush, DeckBuilder.DeckSlot(i + 1));
+                }
+            });
+            public Task ClickAsync(Point point, MouseButtonType button = MouseButtonType.Left)
+            {
+                for (int i = 0; i < _slots.Length; i++)
+                    if (_slots[i].HasValue && DeckBuilder.DeckSlot(i + 1).Contains(point))
+                    { _slots[i] = null; Removals++; return Task.CompletedTask; }
+                if (new Rectangle(386, 178, 42, 50).Contains(point))
+                {
+                    Selections++;
+                    if (Selections == 1 || RepeatRace) { _slots[0] = Color.Magenta; _slots[1] = Color.Cyan; }
+                    else _slots[0] = Color.Cyan;
+                }
+                return Task.CompletedTask;
+            }
+            public void Move(Point point) { }
+            public Task TypeAsync(string text) => Task.CompletedTask;
+            public void Reload() { }
+            public DateTime LastPageLoadUtc => DateTime.MinValue;
+            public void Repaint() { }
+        }
+
+        private sealed class DelayedScrollIo : IGameIo
+        {
+            internal StageFrame Before, After;
+            internal int Clicks, Polls;
+            public StageFrame Grab() => Clicks > 0 && ++Polls >= 3 ? After : Before;
+            public Task ClickAsync(Point point, MouseButtonType button = MouseButtonType.Left)
+            { Clicks++; return Task.CompletedTask; }
+            public void Move(Point point) { }
+            public Task TypeAsync(string text) => Task.CompletedTask;
+            public void Reload() { }
+            public DateTime LastPageLoadUtc => DateTime.MinValue;
+            public void Repaint() { }
+        }
+
         private static void TrackEditorUi()
         {
             var source = Path.Combine(_scratch, "ui-track.txt");
@@ -744,6 +843,36 @@ namespace FvmAssistant.Tests
             return false;
         }
 
+        private static void DuoFixedBursts()
+        {
+            DuoTrackPlan Plan(string text) => DuoTrackPlan.Build(new TrackPreflight(TrackFile.Parse(text), null),
+                new[] { "Card", "Burst" }.Where(name => text.Contains(name + "\t")), false);
+            void Reject(Action action, string message)
+            {
+                bool rejected = false;
+                try { action(); }
+                catch (Exception error) when (error is NotSupportedException || error is InvalidOperationException) { rejected = true; }
+                Check(rejected, message);
+            }
+            var guest = Plan("人物1位置=71\nCard\t7[3]补极\t000|35\nBurst\t30[5]补极\t000|35\t000|36");
+            Check(guest.Cells.Count == 2 && guest.Cells.Contains(new Cell(3, 5)) && guest.Cells.Contains(new Cell(3, 6)),
+                "Every burst target must be guarded, including a target shared with the account's own ordinary card");
+            var host = Plan("人物1位置=11\nCard\t7[3]补极\t000|34");
+            DuoTrackPlan.RequireDisjoint(host, guest);
+            bool rejected = false;
+            try { DuoTrackPlan.RequireDisjoint(host, Plan("人物1位置=71\nBurst\t30[5]补极\t000|34")); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "A burst must not bypass the other account's formation guard");
+            rejected = false;
+            try { DuoTrackPlan.RequireDisjoint(host, Plan("人物1位置=71\nBurst\t30[5]补极\t000|11")); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "A burst must not target the other account's character");
+            Reject(() => Plan("人物1位置=71\nBurst\t30[5]补极\t010|35"), "Timed bursts remain unsupported in duo mode");
+            Reject(() => Plan("人物1位置=71\nBurst\t30[5]\t000|35"), "A nonrepeating burst must not enter the fixed-burst path");
+            Reject(() => Plan("人物1位置=71\nBurst\t30[2]补极\t000|35"), "Shield actions remain unsupported in duo mode");
+            Reject(() => Plan("人物1位置=71\nBurst\t30[6]补极\t000|35"), "Unknown layer-six actions remain unsupported");
+        }
+
         private static void DuoPlans()
         {
             DuoTrackPlan Plan(string player, string cardCell, int layer = 3) =>
@@ -773,11 +902,91 @@ namespace FvmAssistant.Tests
             rejected = false;
             try { Plan("21", "22", 1); }
             catch (NotSupportedException) { rejected = true; }
-            Check(rejected, "Support-card cooperation must remain unavailable in the first duo mode");
+            Check(rejected, "A support card without a matching stage layout must stop a duo plan");
             rejected = false;
             try { DuoTrackPlan.Build(new TrackPreflight(TrackFile.Parse("Card\t7[3]补极\t000|12"), null), new[] { "Card" }, false); }
             catch (NotSupportedException) { rejected = true; }
             Check(rejected, "An account must have an explicit own-character cell");
+        }
+
+        private static void BareWaterAttacks()
+        {
+            var folder = Path.Combine(_scratch, "承载轨道", "95BareWater");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "1Water.txt"), "木盘子\t7[1]补极\t000|12\t000|22");
+            var water = CarrierMap.Find(_scratch, new LevelEntry { Island = "BareWater", Name = "Water" }, null);
+            var text = "人物1位置=11\n钢丝球\t7[3]补极\t000|12\n木盘子\t7[1]";
+            var track = TrackFile.Parse(text);
+            var preflight = new TrackPreflight(track, water);
+            Check(preflight.Inspect(new[] { "钢丝球", "木盘子" }).CanStart, "An unused plate must not cover the water attack");
+            var duo = DuoTrackPlan.Build(preflight, new[] { "钢丝球" }, false);
+            Check(duo.Cells.Count == 1, "Bare water attacks do not require a support mapping");
+            var runner = new BattleRunner(null, null, new BattleLayout(2), track,
+                new Dictionary<string, int> { ["钢丝球"] = 1, ["木盘子"] = 2 }, false, false, water, _ => { });
+            Check(((HashSet<Cell>)Get(runner, "_carrierCells")).Count == 0 &&
+                ((HashSet<Cell>)Get(runner, "_mapCarrierCells")).Count == 0,
+                "The runner must not remember or repair a plate below the water attack");
+            Check(!new TrackPreflight(TrackFile.Parse(text.Replace("000|12", "000|13")), water)
+                .Inspect(new[] { "钢丝球", "木盘子" }).CanStart, "Known land targets must be refused");
+            Check(!new TrackPreflight(TrackFile.Parse(text.Replace("木盘子\t7[1]", "木盘子\t7[1]补极\t000|12")), water)
+                .Inspect(new[] { "钢丝球", "木盘子" }).CanStart, "An explicit plate must not cover the water attack");
+            Check(!new TrackPreflight(TrackFile.Parse(text + "\nCard\t7[3]补极\t000|12"), water)
+                .Inspect(new[] { "钢丝球", "Card" }).CanStart, "An ordinary formation must not cover the water attack");
+            var ordinary = TrackFile.Parse("Card\t7[3]补极\t000|12\n木盘子\t7[1]");
+            var ordinaryRunner = new BattleRunner(null, null, new BattleLayout(2), ordinary,
+                new Dictionary<string, int> { ["Card"] = 1, ["木盘子"] = 2 }, false, false, water, _ => { });
+            Check(((HashSet<Cell>)Get(ordinaryRunner, "_carrierCells")).Contains(new Cell(1, 2)),
+                "Ordinary cards must retain their water support dependency");
+        }
+
+        private static void DuoFixedCarriers()
+        {
+            var folder = Path.Combine(_scratch, "承载轨道", "94DuoFixed");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "1Water.txt"), "木盘子\t7[1]补极\t000|12\t000|22");
+            File.WriteAllText(Path.Combine(folder, "2Timed.txt"), "木盘子\t7[1]独\t010|12");
+            File.WriteAllText(Path.Combine(folder, "3Mixed.txt"), "木盘子\t7[1]补极\t000|12\n棉花糖\t7[1]补极\t000|22");
+            var water = CarrierMap.Find(_scratch, new LevelEntry { Island = "DuoFixed", Name = "Water" }, null);
+            var timed = CarrierMap.Find(_scratch, new LevelEntry { Island = "DuoFixed", Name = "Timed" }, null);
+            var mixed = CarrierMap.Find(_scratch, new LevelEntry { Island = "DuoFixed", Name = "Mixed" }, null);
+            DuoTrackPlan Plan(string player, string target, string support, CarrierMap map)
+            {
+                var text = "人物1位置=" + player + "\nCard\t7[3]补极\t000|" + target;
+                if (support != null) text += "\n木盘子\t" + support;
+                return DuoTrackPlan.Build(new TrackPreflight(TrackFile.Parse(text), map),
+                    support == null ? new[] { "Card" } : new[] { "Card", "木盘子" }, false);
+            }
+            void Reject(Action action, string message)
+            {
+                bool refused = false;
+                try { action(); } catch (NotSupportedException) { refused = true; }
+                Check(refused, message);
+            }
+            var inherited = Plan("11", "12", "7[1]继", water);
+            Check(inherited.Cells.Select(c => c.ToString()).OrderBy(c => c).SequenceEqual(new[] { "12", "22" }),
+                "Inherited support cells must be included even where the account has no ordinary card");
+            var landGuest = Plan("71", "23", null, water);
+            DuoTrackPlan.RequireDisjoint(inherited, landGuest);
+            var localHost = Plan("11", "12", "7[1]", water);
+            var localGuest = Plan("21", "22", "7[1]", water);
+            Check(localHost.Cells.Count == 1 && localHost.Cells[0].ToString() == "12",
+                "Empty support rows repair only this account's ordinary targets");
+            DuoTrackPlan.RequireDisjoint(localHost, localGuest);
+            bool shared = false;
+            try { DuoTrackPlan.RequireDisjoint(inherited, localGuest); }
+            catch (InvalidOperationException) { shared = true; }
+            Check(shared, "A support formation must not overlap the other account's card cells");
+            shared = false;
+            try { DuoTrackPlan.RequireDisjoint(inherited, Plan("22", "23", null, null)); }
+            catch (InvalidOperationException) { shared = true; }
+            Check(shared, "A support formation must not target the other character");
+            Reject(() => Plan("11", "12", null, water), "Water targets must have their own mapped support card");
+            var waterCharacter = Plan("12", "23", null, water);
+            Check(waterCharacter.Player.ToString() == "12", "Character positioning must remain independent of card-support requirements");
+            Reject(() => Plan("11", "23", null, timed), "Timed stage supports need further coordination");
+            Reject(() => Plan("11", "23", null, mixed), "Mixed support types need further coordination");
+            Reject(() => Plan("11", "12", "7[1]补独\t010|12", water), "A timed support card must not enter fixed duo mode");
+            Reject(() => Plan("11", "12", "7[1]极\t000|12", water), "Explicit supports must maintain their formation");
         }
 
         private static void CarrierDefaults()
@@ -953,6 +1162,134 @@ namespace FvmAssistant.Tests
             try { actions.ExecuteAsync("accept", 173, result.ListHash, null).GetAwaiter().GetResult(); }
             catch (InvalidOperationException) { rejected = true; }
             Check(rejected && io.Clicks == 3, "Disconnects must not accept the task visible underneath");
+        }
+
+        private static void TransitionScreenStatus()
+        {
+            var io = new MissionIo { Current = Frame(Color.Black, bitmap => bitmap.SetPixel(10, 10, Color.White)) };
+            var settings = new GrindSettings { Track = TrackFile.Parse("人物1位置=11\nCard\t7[3]\t001|12"),
+                SlotCount = 1, SlotOfCard = new Dictionary<string, int> { ["Card"] = 1 } };
+            var loop = new GrindLoop(io, Detector(), settings, Path.Combine(_scratch, "transition-screen"));
+            Set(loop, "<LastScreen>k__BackingField", GameScreen.VictoryDialog);
+            var found = ((Task<bool>)Call(loop, "WaitForAsync", new Func<GameScreen, bool>(screen => screen == GameScreen.Battle),
+                TimeSpan.FromSeconds(1), CancellationToken.None)).GetAwaiter().GetResult();
+            Check(found && loop.LastScreen == GameScreen.Battle, "A recognized boss transition must replace the old victory screen");
+            io.Current = Frame(Color.White);
+            ((Task)Call(loop, "WaitUntilAsync", new Func<GameScreen, bool>(screen => screen == GameScreen.Disconnected),
+                TimeSpan.FromSeconds(1), "test transition failed", CancellationToken.None)).GetAwaiter().GetResult();
+            Check(loop.LastScreen == GameScreen.Disconnected && io.Clicks == 0,
+                "Transition polling reports observed failures without sending extra input");
+        }
+
+        private static void FinishRoundRewards()
+        {
+            var directory = Path.Combine(_scratch, "finish-round-templates");
+            Directory.CreateDirectory(directory);
+            var rules = (IEnumerable)typeof(ScreenDetector).GetField("Rules", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            var markers = new Dictionary<string, Point>();
+            foreach (var rule in rules)
+                foreach (var name in (string[])rule.GetType().GetField("Item2").GetValue(rule))
+                    if (!markers.ContainsKey(name)) markers[name] = new Point(20 + markers.Count * 8, 10);
+            foreach (var name in new[] { "房间_2P等待中", "房间_2P已关闭" }) markers[name] = new Point(20 + markers.Count * 8, 10);
+            foreach (var marker in markers)
+                using (var bitmap = new Bitmap(1, 1))
+                {
+                    bitmap.SetPixel(0, 0, Color.White);
+                    bitmap.Save(Path.Combine(directory, "(" + marker.Value.X + ",10)" + marker.Key + ".png"));
+                }
+            StageFrame Marked(params string[] names) => Frame(Color.Black, bitmap =>
+            {
+                foreach (var name in names) bitmap.SetPixel(markers[name].X, markers[name].Y, Color.White);
+            });
+            var library = new TemplateLibrary();
+            library.LoadDirectory(directory);
+            foreach (bool boss in new[] { false, true })
+            {
+                var io = new FinishRoundIo
+                {
+                    Room = Marked("选卡界面", "房间_2P已关闭"), Battle = Marked("退出按钮"), Victory = Marked("胜利弹窗"),
+                    Shuffle = Marked("翻宝箱", "翻宝箱_开始洗牌"), Pick = Marked("翻宝箱"), Done = Marked("翻宝箱", "翻宝箱_完成"),
+                    Lobby = Marked("排行", "跳转按钮"), World = Marked("世界地图"), IgnoredWorldMapClicks = boss ? 1 : 0
+                };
+                io.Current = io.Room;
+                var settings = new GrindSettings { Track = TrackFile.Parse("人物1位置=11\nCard\t7[3]\t001|12"),
+                    Rounds = 3, Boss = boss, SlotCount = 1, SlotOfCard = new Dictionary<string, int> { ["Card"] = 1 } };
+                var loop = new GrindLoop(io, new ScreenDetector(library), settings, Path.Combine(_scratch, "finish-round-" + boss));
+                io.OnCharacter = () => { loop.FinishAfterRound(); loop.FinishAfterRound(); };
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20))) loop.RunAsync(timeout.Token).GetAwaiter().GetResult();
+                Check(loop.State == "finished-early" && loop.RoundsDone == 1 && loop.LastScreen == GameScreen.Lobby,
+                    "Finish must collect the current round and return to town instead of launching round two");
+                Check(io.Starts == 1 && io.FreeFlips == 1 && io.Finishes == 1 && io.Characters == 1,
+                    "A finish request must not abort rewards, replay a paid flip, or place a second character");
+                Check(loop.BossRoundsDone == (boss ? 1 : 0) && io.BossEntries == (boss ? 1 : 0),
+                    "A requested boss continuation belongs to the current round and must finish before stopping");
+                Check(io.WorldMapClicks == (boss ? 2 : 1), "A lost first map input must retry once without replaying the reward flow");
+            }
+            var returnSettings = new GrindSettings { Track = TrackFile.Parse("Card\t7[3]\t001|12"),
+                SlotCount = 1, SlotOfCard = new Dictionary<string, int> { ["Card"] = 1 } };
+            foreach (var blocked in new[] { Marked("断开连接"), Marked("健康提示"), Marked("活动弹窗_关闭"), Frame(Color.Black) })
+            {
+                var io = new FinishRoundIo { Current = blocked };
+                var loop = new GrindLoop(io, new ScreenDetector(library), returnSettings, Path.Combine(_scratch, "return-map-guard"));
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(500)))
+                {
+                    bool stopped = false;
+                    try { ((Task)Call(loop, "OpenWorldMapAsync", timeout.Token)).GetAwaiter().GetResult(); }
+                    catch (TimeoutException) { stopped = true; }
+                    catch (OperationCanceledException) { stopped = true; }
+                    Check(stopped && io.WorldMapClicks == 0, "A popup or unknown screen cannot authorize a map click");
+                }
+            }
+            var stalledIo = new FinishRoundIo { Current = Marked("排行", "跳转按钮"), IgnoredWorldMapClicks = int.MaxValue };
+            var stalledLoop = new GrindLoop(stalledIo, new ScreenDetector(library), returnSettings, Path.Combine(_scratch, "return-map-stalled"));
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(9)))
+            {
+                bool stopped = false;
+                try { ((Task)Call(stalledLoop, "OpenWorldMapAsync", timeout.Token)).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { stopped = true; }
+                Check(stopped && stalledIo.WorldMapClicks == 3, "An unresponsive visible lobby gets at most three map clicks");
+            }
+            var duoSettings = new GrindSettings { Track = TrackFile.Parse("人物1位置=11\nCard\t7[3]\t001|12"),
+                SlotCount = 1, SlotOfCard = new Dictionary<string, int> { ["Card"] = 1 }, Duo = new DuoSession(DuoRole.Host, 0) };
+            var duoLoop = new GrindLoop(null, null, duoSettings, Path.Combine(_scratch, "finish-round-duo"));
+            bool rejected = false;
+            try { duoLoop.FinishAfterRound(); } catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && !duoLoop.FinishAfterRoundRequested, "A solo finish request cannot split a paired run");
+        }
+
+        private sealed class FinishRoundIo : IGameIo
+        {
+            internal StageFrame Room, Battle, Victory, Shuffle, Pick, Done, Lobby, World, Current;
+            internal Action OnCharacter;
+            internal int Starts, FreeFlips, Finishes, Characters, BossEntries;
+            internal int WorldMapClicks, IgnoredWorldMapClicks;
+            private bool _bossTransition;
+            private int _bossGrabs;
+            public StageFrame Grab()
+            {
+                if (_bossTransition && ++_bossGrabs > 1) { _bossTransition = false; Current = Victory; }
+                return Current;
+            }
+            public Task ClickAsync(Point point, MouseButtonType button = MouseButtonType.Left)
+            {
+                if (point == new Point(857, 456)) { Starts++; Current = Battle; }
+                else if (Current == Battle && point == new BattleLayout(1).CellCenter(new Cell(1, 1)))
+                { Characters++; OnCharacter?.Invoke(); Current = Victory; }
+                else if (point == new Point(468, 345)) { BossEntries++; Current = Battle; _bossTransition = true; _bossGrabs = 0; }
+                else if (point == new Point(568, 345)) Current = Shuffle;
+                else if (point == new Point(708, 504)) Current = Pick;
+                else if (point == new Point(709, 367)) { FreeFlips++; Current = Done; }
+                else if (point == new Point(709, 505)) { Finishes++; Current = Room; }
+                else if (point == new Point(915, 568)) Current = Lobby;
+                else if (point == new Point(866, 58)) { WorldMapClicks++; if (WorldMapClicks > IgnoredWorldMapClicks) Current = World; }
+                else if (point == new Point(500, 187)) Current = Lobby;
+                return Task.CompletedTask;
+            }
+            public void Move(Point point) { }
+            public Task TypeAsync(string text) => Task.CompletedTask;
+            public void Reload() { }
+            public DateTime LastPageLoadUtc => DateTime.MinValue;
+            public void Repaint() { }
         }
 
         private static void GuildPublication()
@@ -1168,6 +1505,60 @@ namespace FvmAssistant.Tests
             var signature = (CardSignature)Get(plan, "Signature");
             Check(signature != null && signature.Score(io.Grab(), Layout.CardRegion(new Cell(1, 2))) >= 0.3,
                 "Held-card learning must produce usable on-board evidence");
+        }
+
+        private static void GuestChoicePrecedence()
+        {
+            var path = Path.Combine(_scratch, "choice-templates");
+            Directory.CreateDirectory(path);
+            var rules = (IEnumerable)typeof(ScreenDetector).GetField("Rules", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            var names = new HashSet<string>(new[] { "房间_2P等待中", "房间_2P已关闭" });
+            foreach (var rule in rules)
+                foreach (var name in (string[])rule.GetType().GetField("Item2").GetValue(rule)) names.Add(name);
+            var points = new Dictionary<string, Point>();
+            int index = 0;
+            foreach (var name in names)
+                using (var bitmap = new Bitmap(1, 1))
+                {
+                    var point = new Point(10 + index++ * 10, 10);
+                    points[name] = point;
+                    bitmap.SetPixel(0, 0, Color.White);
+                    bitmap.Save(Path.Combine(path, "(" + point.X + ",10)" + name + ".png"));
+                }
+            var library = new TemplateLibrary();
+            library.LoadDirectory(path);
+            var detector = new ScreenDetector(library);
+            StageFrame Choice(string marker) => Frame(Color.Black, bitmap =>
+            {
+                bitmap.SetPixel(475, 290, Color.FromArgb(130, 180, 230));
+                bitmap.SetPixel(630, 225, Color.FromArgb(130, 180, 230));
+                bitmap.SetPixel(500, 350, Color.White);
+                if (marker != null) bitmap.SetPixel(points[marker].X, points[marker].Y, Color.White);
+            });
+            Check(detector.Detect(Choice(null)) == GameScreen.AwaitHostDecision, "The guest overlay must remain recognized");
+            Check(detector.Detect(Choice("胜利弹窗")) == GameScreen.VictoryDialog, "A host victory must outrank the guest heuristic");
+            Check(detector.Detect(Choice("健康提示")) == GameScreen.HealthNotice, "A recognized notice must outrank the guest heuristic");
+            StageFrame Room(bool notice) => Frame(Color.Black, bitmap =>
+            {
+                bitmap.SetPixel(points["选卡界面"].X, points["选卡界面"].Y, Color.White);
+                if (!notice) return;
+                foreach (var point in new[] { new Point(360, 264), new Point(594, 264), new Point(360, 327), new Point(594, 327) })
+                    bitmap.SetPixel(point.X, point.Y, Color.FromArgb(126, 200, 245));
+                foreach (int x in new[] { 394, 451, 494, 551 })
+                    bitmap.SetPixel(x, 347, Color.FromArgb(245, 170, 40));
+            });
+            Check(detector.Detect(Room(false)) == GameScreen.Room, "An unobstructed room must remain recognized");
+            Check(detector.Detect(Room(true)) == GameScreen.RoomNotice, "A compact system notice must outrank its underlying room");
+            var noticeIo = new MissionIo { Current = Room(true) };
+            var blocked = new GrindLoop(noticeIo, detector, new GrindSettings
+            {
+                TrackPath = "notice.txt", Track = TrackFile.Parse("人物1位置=11\nCard\t7[3]补极\t000|12"),
+                SlotOfCard = new Dictionary<string, int> { ["Card"] = 1 }, SlotCount = 1, Rounds = 1,
+            }, Path.Combine(_scratch, "room-notice"));
+            blocked.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
+            Check(blocked.State == "failed" && blocked.Messages.Any(message => message.Contains("system notice")) &&
+                noticeIo.Clicks == 0 && blocked.RoundsDone == 0,
+                "A blocking room notice must fail with an actionable message without accepting or starting it");
         }
 
         private static ScreenDetector Detector()

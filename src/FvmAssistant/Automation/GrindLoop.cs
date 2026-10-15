@@ -61,7 +61,8 @@ namespace FvmAssistant.Automation
         private static readonly Point Finish = new Point(709, 505);
         private static readonly Point Park = new Point(940, 300);
         private static readonly Rectangle TreasureCards = new Rectangle(482, 82, 456, 390);
-        private static readonly Point WorldMapButton = new Point(866, 41);
+        // Click the label, which is active on both town and island maps.
+        private static readonly Point WorldMapButton = new Point(866, 58);
         private static readonly Point TownOnWorldMap = new Point(500, 187);
         // Room list positions on 曲奇岛; other levels can shift the dialog right (ScreenDetector.RoomListOffset).
         // Upper half of 创建: the "任务完成了" bubble of the 任务 button can cover its bottom edge.
@@ -132,6 +133,20 @@ namespace FvmAssistant.Automation
 
         /// <summary>Rounds whose boss stage was won.</summary>
         public int BossRoundsDone { get; private set; }
+        private volatile bool _finishAfterRound;
+        public bool FinishAfterRoundRequested => _finishAfterRound;
+        private bool ShouldFinishAtRoom => RoundsDone >= _settings.Rounds || (_finishAfterRound && RoundsDone > 0);
+
+        public void FinishAfterRound()
+        {
+            if (_settings.Duo != null) throw new InvalidOperationException("Finish after round is available only for solo runs. Stop paired runs through their coordinator.");
+            lock (_gate)
+            {
+                if (_finishAfterRound) return;
+                _finishAfterRound = true;
+            }
+            Say("Finish requested: collect this round's rewards and return to town before starting another round.");
+        }
         public GameScreen LastScreen { get; private set; }
         public string State { get; private set; } = "starting";
         public DateTime StartedAt { get; } = DateTime.Now;
@@ -153,7 +168,7 @@ namespace FvmAssistant.Automation
             try
             {
                 await LoopAsync(ct).ConfigureAwait(false);
-                State = "finished";
+                State = _finishAfterRound && RoundsDone < _settings.Rounds ? "finished-early" : "finished";
                 Say($"完成 {RoundsDone} 局");
             }
             catch (OperationCanceledException)
@@ -208,7 +223,7 @@ namespace FvmAssistant.Automation
                             reloads = popups = 0; // budgets are per round, so long runs survive the odd disconnect
                             Say($"第 {RoundsDone} 局完成" + (bossWon ? "（含 boss）" : ""));
                         }
-                        if (RoundsDone >= _settings.Rounds && (_settings.Duo == null || _settings.RoomNumbers == null))
+                        if (ShouldFinishAtRoom && (_settings.Duo == null || _settings.RoomNumbers == null))
                         {
                             if (_settings.Duo == null) await ReturnToTownAsync(ct).ConfigureAwait(false);
                             return;
@@ -323,6 +338,11 @@ namespace FvmAssistant.Automation
                             }
                         }
 
+                        if (ShouldFinishAtRoom)
+                        {
+                            await ReturnToTownAsync(ct).ConfigureAwait(false);
+                            return;
+                        }
                         Say($"第 {RoundsDone + 1} 局：开始");
                         await ClickAndParkAsync(StartButton, 500, ct).ConfigureAwait(false);
                         await WaitUntilAsync(s => s != GameScreen.Room, StartLimit, "点了开始但没有离开房间", ct).ConfigureAwait(false);
@@ -424,6 +444,13 @@ namespace FvmAssistant.Automation
                         break;
 
                     case GameScreen.AwaitHostDecision:
+                        if (_settings.Duo?.Role == DuoRole.Host && victory)
+                        {
+                            State = "duo-verifying-host-choice";
+                            if (!await WaitForAsync(s => s != GameScreen.AwaitHostDecision, TimeSpan.FromSeconds(2), ct).ConfigureAwait(false))
+                                throw new InvalidOperationException("The host still shows a guest-choice overlay after victory.");
+                            break;
+                        }
                         if (_settings.Duo?.Role != DuoRole.Guest)
                             throw new InvalidOperationException("A host-choice dialog appeared outside the guest duo flow.");
                         victory = true;
@@ -507,6 +534,9 @@ namespace FvmAssistant.Automation
                         _io.Reload();
                         await Task.Delay(5000, ct).ConfigureAwait(false);
                         break;
+
+                    case GameScreen.RoomNotice:
+                        throw new InvalidOperationException("A system notice blocks Start/Ready. Inspect the room dialog and resolve its requirement before retrying; item-bag capacity may need attention.");
 
                     case GameScreen.HealthNotice:
                     case GameScreen.EventPopup:
@@ -717,18 +747,44 @@ namespace FvmAssistant.Automation
         private async Task ReturnToTownAsync(CancellationToken ct)
         {
             State = "returning to town";
-            Say("全部战斗完成，离开房间返回美味镇");
+            Say(_finishAfterRound && RoundsDone < _settings.Rounds
+                ? "Finish requested: leaving the room and returning to town."
+                : "全部战斗完成，离开房间返回美味镇");
             await ClickAndParkAsync(LeaveRoom, 300, ct).ConfigureAwait(false);
             await WaitUntilAsync(s => s == GameScreen.Lobby, NavigationStepLimit,
                 "离开房间后没有到达关卡地图", ct).ConfigureAwait(false);
-            await ClickAndParkAsync(WorldMapButton, 300, ct).ConfigureAwait(false);
-            await WaitUntilAsync(s => s == GameScreen.WorldMap, NavigationStepLimit,
-                "关卡地图没有打开世界地图", ct).ConfigureAwait(false);
+            await OpenWorldMapAsync(ct).ConfigureAwait(false);
             await ClickAndParkAsync(TownOnWorldMap, 300, ct).ConfigureAwait(false);
             await WaitUntilAsync(s => s == GameScreen.Lobby, NavigationStepLimit,
                 "世界地图没有返回美味镇", ct).ConfigureAwait(false);
             LastScreen = GameScreen.Lobby;
             Say("已返回美味镇");
+        }
+
+        private async Task OpenWorldMapAsync(CancellationToken ct)
+        {
+            var until = DateTime.UtcNow + NavigationStepLimit;
+            var nextClick = DateTime.MinValue;
+            int attempts = 0;
+            while (DateTime.UtcNow < until)
+            {
+                ct.ThrowIfCancellationRequested();
+                LastScreen = _detector.Detect(_io.Grab());
+                if (LastScreen == GameScreen.WorldMap) return;
+                if (LastScreen == GameScreen.Disconnected || LastScreen == GameScreen.HealthNotice || LastScreen == GameScreen.EventPopup)
+                    break;
+                // The island can paint its lobby controls before it accepts input after room exit.
+                // Retry only while the lobby remains visible; an unknown screen never authorizes a click.
+                if (LastScreen == GameScreen.Lobby && attempts < 3 && DateTime.UtcNow >= nextClick)
+                {
+                    await ClickAndParkAsync(WorldMapButton, 300, ct).ConfigureAwait(false);
+                    attempts++;
+                    nextClick = DateTime.UtcNow.AddSeconds(2);
+                }
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            Snapshot("world-map-timeout");
+            throw new TimeoutException("The island map did not open the world map after bounded retries.");
         }
 
         /// <summary>
@@ -827,6 +883,7 @@ namespace FvmAssistant.Automation
             while (DateTime.UtcNow < until)
             {
                 var screen = _detector.Detect(_io.Grab());
+                LastScreen = screen;
                 if (done(screen)) return true;
                 if (screen == GameScreen.HealthNotice || screen == GameScreen.EventPopup) return false; // let the loop close it
                 await Task.Delay(300, ct).ConfigureAwait(false);
@@ -839,7 +896,8 @@ namespace FvmAssistant.Automation
             var until = DateTime.UtcNow + limit;
             while (DateTime.UtcNow < until)
             {
-                if (done(_detector.Detect(_io.Grab()))) return;
+                LastScreen = _detector.Detect(_io.Grab());
+                if (done(LastScreen)) return;
                 await Task.Delay(300, ct).ConfigureAwait(false);
             }
             Snapshot("timeout");

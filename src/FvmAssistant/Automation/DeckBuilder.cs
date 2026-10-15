@@ -28,17 +28,27 @@ namespace FvmAssistant.Automation
 
         public StageFrame Get(string name)
         {
+            ValidateName(name);
             var path = Path.Combine(_directory, name + ".png");
-            if (!File.Exists(path)) throw new KeyNotFoundException($"还没有学习卡片 {name}：先在房间里手动把它放进卡组，再点操作面板的“学习当前卡组”");
+            if (!File.Exists(path)) throw new KeyNotFoundException("Card icon not learned: " + name + ". Scan it from 背包 or learn it from a room deck first.");
             using (var bmp = new Bitmap(path))
                 return StageFrame.FromBitmap(bmp, new Rectangle(Point.Empty, bmp.Size));
         }
 
         public void Save(string name, StageFrame icon)
         {
-            if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException("bad card name " + name);
+            ValidateName(name);
             using (var bmp = icon.ToBitmap())
                 bmp.Save(Path.Combine(_directory, name + ".png"), ImageFormat.Png);
+        }
+
+        public static void ValidateName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name != name.Trim() || name.EndsWith(".") ||
+                name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.Any(char.IsControl) ||
+                System.Text.RegularExpressions.Regex.IsMatch(name,
+                    @"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                throw new ArgumentException("Use a non-empty card name that is valid as a Windows file name.");
         }
     }
 
@@ -118,6 +128,25 @@ namespace FvmAssistant.Automation
 
         public async Task EnsureAsync(IReadOnlyList<(string name, StageFrame icon)> cards, CancellationToken ct)
         {
+            for (int attempt = 0; ; attempt++)
+                try
+                {
+                    await EnsureLoadedDeckAsync(cards, ct).ConfigureAwait(false);
+                    return;
+                }
+                catch (DeckChangedException) when (attempt == 0)
+                {
+                    _log("Room deck changed while selecting cards; rebuilding once.");
+                }
+        }
+
+        private sealed class DeckChangedException : InvalidOperationException
+        {
+            public DeckChangedException() : base("The room loaded extra deck cards during selection.") { }
+        }
+
+        private async Task EnsureLoadedDeckAsync(IReadOnlyList<(string name, StageFrame icon)> cards, CancellationToken ct)
+        {
             await WaitUntilLoadedAsync(ct).ConfigureAwait(false);
             var icons = cards.Select(c => c.icon).ToList();
             if (DeckMatches(Grab(), icons)) return;
@@ -147,10 +176,13 @@ namespace FvmAssistant.Automation
                     diff = SlotDiff(Grab(), i + 1, icon);
                     if (diff < AvailableDiff) break;
                 }
+                // A remembered deck can arrive after an initially empty, stable card bar.
+                if (FilledSlots(Grab()).Any(slot => slot > i + 1)) throw new DeckChangedException();
                 if (diff >= AvailableDiff)
                     throw new InvalidOperationException($"{name} 没有加进卡组第 {i + 1} 槽（差值 {diff:0.0}）");
                 _log($"选卡：{name} → 第 {i + 1} 槽");
             }
+            if (!DeckMatches(Grab(), icons)) throw new DeckChangedException();
         }
 
         /// <summary>
@@ -212,11 +244,20 @@ namespace FvmAssistant.Automation
             for (int i = 0; i < clicks; i++)
             {
                 await _io.ClickAsync(arrow).ConfigureAwait(false);
-                await Task.Delay(150, ct).ConfigureAwait(false);
-                var now = Grab().Crop(view);
+                _io.Move(Park);
+                var now = last;
+                // After reconnecting, a cached OSR frame can survive the first scroll poll.
+                // Wait for the rendered list before treating an unchanged frame as its end.
+                for (int poll = 0; poll < 8; poll++)
+                {
+                    await Task.Delay(150, ct).ConfigureAwait(false);
+                    now = Grab().Crop(view);
+                    if (now.MeanAbsDiff(last) >= 0.5) break;
+                }
                 if (now.MeanAbsDiff(last) < 0.5) break; // reached the end
+                await Task.Delay(150, ct).ConfigureAwait(false);
                 moved = true;
-                last = now;
+                last = Grab().Crop(view);
             }
             _io.Move(Park);
             return moved;

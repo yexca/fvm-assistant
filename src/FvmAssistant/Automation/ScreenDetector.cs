@@ -12,6 +12,8 @@ namespace FvmAssistant.Automation
         RoomList,
         /// <summary>Room / card selection, where 开始 is.</summary>
         Room,
+        /// <summary>A blocking two-button system notice over an otherwise recognized room.</summary>
+        RoomNotice,
         Battle,
         /// <summary>After the normal stage: 继续作战 (boss, costs a key) / 领取奖品.</summary>
         VictoryDialog,
@@ -102,15 +104,38 @@ namespace FvmAssistant.Automation
 
         public GameScreen Detect(StageFrame frame)
         {
-            if (AwaitingHostDecision(frame)) return GameScreen.AwaitHostDecision;
             foreach (var (screen, all) in Rules)
             {
+                // Pixel heuristics must not hide a positively recognized victory or notice.
+                if (screen == GameScreen.Loot && AwaitingHostDecision(frame)) return GameScreen.AwaitHostDecision;
                 bool match = screen == GameScreen.RoomList
                     ? RoomListOffset(frame) != null
                     : all.All(n => Diff(n, frame) < Tolerance);
-                if (match) return screen;
+                if (match) return screen == GameScreen.Room && RoomSystemNotice(frame) ? GameScreen.RoomNotice : screen;
             }
             return GameScreen.Unknown;
+        }
+
+        /// <summary>Recognize the compact system notice without interpreting or accepting its contents.</summary>
+        internal static bool RoomSystemNotice(StageFrame frame)
+        {
+            if (frame.Width < 600 || frame.Height < 355) return false;
+            bool Background(int x, int y)
+            {
+                int i = (y * frame.Width + x) * 4;
+                return System.Math.Abs(frame.Bgra[i + 2] - 126) <= 6 &&
+                    System.Math.Abs(frame.Bgra[i + 1] - 200) <= 6 &&
+                    System.Math.Abs(frame.Bgra[i] - 245) <= 6;
+            }
+            bool Gold(int x, int y)
+            {
+                int i = (y * frame.Width + x) * 4;
+                return frame.Bgra[i + 2] > 220 && frame.Bgra[i + 1] > 135 &&
+                    frame.Bgra[i + 1] < 210 && frame.Bgra[i] < 65;
+            }
+            return Background(360, 264) && Background(594, 264) &&
+                Background(360, 327) && Background(594, 327) &&
+                Gold(394, 347) && Gold(451, 347) && Gold(494, 347) && Gold(551, 347);
         }
 
         /// <summary>Recognize the guest-only blue decision overlay without storing an account capture.</summary>

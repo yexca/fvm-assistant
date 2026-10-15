@@ -58,6 +58,9 @@ namespace FvmAssistant.Automation
         /// <summary>Stacking layer from the editor: 0 special, 1 承载, 2 护罩, 3 普通, 4 咖啡粉, 5 冷却.</summary>
         public int Layer { get; set; }
 
+        /// <summary>Water attack cards that cannot share their target with a support or ordinary card.</summary>
+        public bool RequiresBareWater => Name == "钢丝球";
+
         /// <summary>Raw flag letters, e.g. "补极独".</summary>
         public string Flags { get; set; } = "";
 
