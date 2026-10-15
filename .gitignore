@@ -39,3 +39,6 @@ cef.log
 # Local tooling
 .pytest_cache/
 __pycache__/
+
+# Windows caches created under an unexpanded environment variable
+/%SystemDrive%/
