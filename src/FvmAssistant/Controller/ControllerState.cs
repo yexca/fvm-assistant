@@ -34,6 +34,7 @@ namespace FvmAssistant.Controller
         public List<AccountEntry> Accounts { get; set; } = new List<AccountEntry>();
         public List<QueueEntry> Queue { get; set; } = new List<QueueEntry>();
         public Dictionary<string, bool> SuccessfulTracks { get; set; } = new Dictionary<string, bool>();
+        public Dictionary<string, string> TrackLevels { get; set; } = new Dictionary<string, string>();
 
         public static string FilePath => Path.Combine(AppPaths.DataRoot(), "controller.json");
 
@@ -49,6 +50,7 @@ namespace FvmAssistant.Controller
             if (state.Accounts == null) state.Accounts = new List<AccountEntry>();
             if (state.Queue == null) state.Queue = new List<QueueEntry>();
             if (state.SuccessfulTracks == null) state.SuccessfulTracks = new Dictionary<string, bool>();
+            if (state.TrackLevels == null) state.TrackLevels = new Dictionary<string, string>();
             if (state.Accounts.Count == 0) state.Accounts.Add(new AccountEntry());
             foreach (var account in state.Accounts) Validate(account);
             if (state.Accounts.GroupBy(a => a.Profile, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1) ||

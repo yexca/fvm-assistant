@@ -53,6 +53,7 @@ namespace FvmAssistant
         private CancellationTokenSource _cts;
         private Task _task;
         private Timer _duoTimer;
+        private readonly InventoryLearningSession _inventory = new InventoryLearningSession();
 
         public GrindController(MainForm form, AppPaths paths, AssistantOptions options)
         {
@@ -82,6 +83,7 @@ namespace FvmAssistant
         public const string UserTrackFolder = "我的轨道";
         public string UserTrackDir => _paths.Tracks;
         public string EditedTrackDir => _paths.EditedTracks;
+        public string InventoryGridPath => Path.Combine(_paths.AccountRoot, "inventory-grid.json");
 
         public IReadOnlyList<LevelEntry> Levels() =>
             LevelCatalog.Load(Path.Combine(TrackDir, "附加程序", "文本", "普通关卡.txt"));
@@ -395,6 +397,32 @@ namespace FvmAssistant
             if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException($"卡名“{name}”不能用作文件名");
             Cards.Save(name, roomFrame.Crop(DeckBuilder.DeckSlot(slot)));
             Log.Info($"learned card {name} from deck slot {slot}");
+        }
+
+        public async Task<InventorySnapshot> CaptureInventoryAsync()
+        {
+            if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new InvalidOperationException("Another automation action is using this account.");
+            try
+            {
+                if (Running) throw new InvalidOperationException("Stop the active run before learning inventory cards.");
+                var io = await CreateGameIoAsync().ConfigureAwait(false);
+                return _inventory.Capture(io.Grab(), DateTime.UtcNow);
+            }
+            finally { OperationLock.Release(); }
+        }
+
+        public async Task<IReadOnlyList<string>> LearnInventoryAsync(string id,
+            IReadOnlyList<InventorySelection> selections, bool replace)
+        {
+            if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new InvalidOperationException("Another automation action is using this account.");
+            try
+            {
+                if (Running) throw new InvalidOperationException("Stop the active run before learning inventory cards.");
+                return _inventory.Save(id, selections, Cards, replace, DateTime.UtcNow);
+            }
+            finally { OperationLock.Release(); }
         }
 
         /// <summary>Empties the room's deck and adds these learned cards in order.</summary>

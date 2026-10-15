@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,6 +65,7 @@ namespace FvmAssistant
                 case "/track": return Track(r);
                 case "/record-track": return RecordTrackAsync(r);
                 case "/cards": return CardsAsync(r);
+                case "/inventory": return InventoryAsync(r);
                 case "/portal": return PortalAsync(r);
                 case "/deck": return DeckAsync(r);
                 case "/missions": return MissionsAsync(r);
@@ -103,6 +105,8 @@ namespace FvmAssistant
                 "   ...&cards=小火炉:日光炉,海星:红柳烤串机   build this deck in the room first (replaces map/slots)",
                 "   ...&boss=1  enter the boss stage (uses a key)   ...&autoflame=1  account picks up flames itself",
                 "/cards[?learn=日光炉,,,,红柳烤串机]   list learned card icons / learn them from the current deck bar",
+                "/inventory?state=capture   capture the manually opened 背包 page for reviewed card learning",
+                "/inventory?state=learn&id=...&items=JSON[&replace=1]   save named 42x50 icons; items: [{Name,X,Y}]; items64 accepts UTF-8 base64 JSON",
                 "/deck?cards=日光炉,红柳烤串机   empty the room's deck and add these cards in order",
                 "/record-track[?rec=<recording-id>][&save=曲奇-录制[&overwrite=1]]   read a recording back as a track (default: newest)",
                 "/portal?state=select&server=<server-number>   choose a server through the visible 4399 portal controls",
@@ -795,6 +799,27 @@ namespace FvmAssistant
                 await Task.Delay(250).ConfigureAwait(false);
             }
             throw new InvalidOperationException("The server page did not confirm entry into server " + server + ". Check the open game window.");
+        });
+
+        private Task<object> InventoryAsync(HttpRequest r) => Guard<object>(async () =>
+        {
+            var state = r.Q("state", "capture");
+            if (state == "capture")
+            {
+                var snapshot = await _grind.CaptureInventoryAsync().ConfigureAwait(false);
+                using (var bitmap = snapshot.Frame.ToBitmap())
+                using (var stream = new MemoryStream())
+                {
+                    bitmap.Save(stream, ImageFormat.Png);
+                    return new { id = snapshot.Id, png = Convert.ToBase64String(stream.ToArray()) };
+                }
+            }
+            if (state != "learn") throw new HttpError(400, "Inventory state must be capture or learn.");
+            // UTF-8 base64 avoids expanding each Chinese character to nine URL characters in a full-page batch.
+            var json = r.Q("items64") is string packed ? Encoding.UTF8.GetString(Convert.FromBase64String(packed)) : r.Q("items");
+            var items = Json.Deserialize<List<InventorySelection>>(json ?? throw new HttpError(400, "Missing items or items64."));
+            var learned = await _grind.LearnInventoryAsync(r.Q("id"), items, r.Flag("replace")).ConfigureAwait(false);
+            return new { learned, cards = _grind.Cards.Names };
         });
 
         private Task<object> CardsAsync(HttpRequest r) => Guard<object>(async () =>

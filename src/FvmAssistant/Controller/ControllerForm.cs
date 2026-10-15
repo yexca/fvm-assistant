@@ -25,10 +25,17 @@ namespace FvmAssistant.Controller
         private readonly TextBox _server = new TextBox();
         private readonly TextBox _entryUrl = new TextBox();
         private readonly ListBox _cards = new ListBox();
+        private readonly TabControl _accountWorkspace = new TabControl { Dock = DockStyle.Fill };
         private readonly TextBox _learn = new TextBox();
         private readonly ListBox _tracks = new ListBox();
         private readonly ComboBox _trackAccount = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
-        private readonly TextBox _trackLevel = new TextBox();
+        private readonly ComboBox _trackLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown,
+            AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.ListItems };
+        private readonly CheckBox _showAllTracks = new CheckBox { Text = "Show all stages", AutoSize = true };
+        private readonly TrackBoardControl _trackBoard = new TrackBoardControl();
+        private readonly Label _trackSummary = new Label { AutoSize = true, ForeColor = Muted };
+        private readonly Dictionary<string, Bitmap> _cardIcons = new Dictionary<string, Bitmap>();
+        private readonly Dictionary<string, Bitmap> _trackIcons = new Dictionary<string, Bitmap>();
         private readonly CheckBox _success = new CheckBox { Text = "此轨道已在当前账号和关卡通关", AutoSize = true };
         private readonly ComboBox _queueAccount = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
         private readonly ListBox _queue = new ListBox();
@@ -67,6 +74,7 @@ namespace FvmAssistant.Controller
         private AccountEntry _activeHost;
         private AccountEntry _activeGuest;
         private bool _loading;
+        private bool _refreshingTracks;
 
         public ControllerForm()
         {
@@ -87,7 +95,7 @@ namespace FvmAssistant.Controller
             var header = new System.Windows.Forms.Panel { Dock = DockStyle.Fill, BackColor = Ink, Padding = new Padding(24, 14, 20, 10) };
             header.Controls.Add(new Label { Text = "美食大战老鼠  /  FvmAssistant", Dock = DockStyle.Top, Height = 30,
                 ForeColor = Color.White, Font = new Font(Font.FontFamily, 16f, FontStyle.Bold) });
-            header.Controls.Add(new Label { Text = "管理账号、轨道和自动任务", Dock = DockStyle.Bottom, Height = 25,
+            header.Controls.Add(new Label { Text = "Account cards  /  Stage formations  /  Task execution", Dock = DockStyle.Bottom, Height = 25,
                 ForeColor = Color.FromArgb(194, 205, 220), Font = new Font(Font.FontFamily, 9f) });
             root.Controls.Add(header, 0, 0);
 
@@ -270,24 +278,41 @@ namespace FvmAssistant.Controller
             left.Controls.Add(Actions(Button("添加账号", AddAccount, true), Button("移除", RemoveAccount)), 0, 2);
             split.Panel1.Controls.Add(left);
 
-            var right = Grid(2);
-            AddWide(right, Section("账号设置"));
-            Row(right, "档案名称", _profile);
-            Row(right, "控制端口", _port);
-            Row(right, "服务器", _server);
-            Row(right, "游戏入口", _entryUrl);
-            AddWide(right, Actions(Button("保存设置", SaveAccount, true), AsyncButton("打开游戏", OpenSelectedGameAsync),
+            var settings = Grid(2);
+            AddWide(settings, Section("账号设置"));
+            Row(settings, "档案名称", _profile);
+            Row(settings, "控制端口", _port);
+            Row(settings, "服务器", _server);
+            Row(settings, "游戏入口", _entryUrl);
+            AddWide(settings, Actions(Button("保存设置", SaveAccount, true), AsyncButton("打开游戏", OpenSelectedGameAsync),
                 Button("账号目录", () => OpenFolder(SelectedAccount == null ? null : new AppPaths(SelectedAccount.Profile).AccountRoot))));
-            AddWide(right, Hint("数字区服会在打开游戏时自动选择；其他区服可填写直达网址，或在游戏窗口手动选择。"));
-            AddWide(right, Section("已学习卡片"));
+            AddWide(settings, Hint("数字区服会在打开游戏时自动选择；其他区服可填写直达网址，或在游戏窗口手动选择。"));
+            AddWide(settings, Actions(AsyncButton("清理账号数据…", CleanAccountAsync)));
+
+            var library = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5,
+                Padding = new Padding(12), BackColor = Surface };
+            library.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            library.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            library.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            library.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            library.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            library.Controls.Add(Section("Card library"), 0, 0);
+            library.Controls.Add(Actions(AsyncButton("Scan 背包...", ScanInventoryAsync, true),
+                AsyncButton("打开游戏", OpenSelectedGameAsync), Button("刷新卡片", RefreshCards), Button("删除所选图标", DeleteCard)), 0, 1);
             _cards.Dock = DockStyle.Fill;
             _cards.BorderStyle = BorderStyle.FixedSingle;
-            AddWide(right, _cards, 115);
-            AddWide(right, Actions(Button("刷新卡片", RefreshCards), Button("删除所选图标", DeleteCard)));
-            Row(right, "卡槽名称", _learn);
-            AddWide(right, Hint("按卡槽顺序用逗号分隔；留空可跳过对应卡槽。先在游戏房间准备好卡组。"));
-            AddWide(right, Actions(AsyncButton("从当前房间学习", LearnCardsAsync), AsyncButton("清理账号数据…", CleanAccountAsync)));
-            split.Panel2.Controls.Add(right);
+            _cards.DrawMode = DrawMode.OwnerDrawFixed;
+            _cards.ItemHeight = 54;
+            _cards.DrawItem += DrawLibraryCard;
+            library.Controls.Add(_cards, 0, 2);
+            library.Controls.Add(Hint("Open the defense-card page in 背包, then scan and review its icons. Name different star variants separately.\n" +
+                "Optional room learning: enter comma-separated slot names; empty entries skip slots."), 0, 3);
+            _learn.Width = 250;
+            library.Controls.Add(Actions(new Label { Text = "Room slots (optional)", AutoSize = true, Margin = new Padding(0, 8, 5, 0) },
+                _learn, AsyncButton("从当前房间学习", LearnCardsAsync)), 0, 4);
+            _accountWorkspace.TabPages.Add(Page("Card library", library));
+            _accountWorkspace.TabPages.Add(Page("Account settings", settings));
+            split.Panel2.Controls.Add(_accountWorkspace);
             return split;
         }
 
@@ -308,19 +333,47 @@ namespace FvmAssistant.Controller
             _tracks.DrawItem += DrawTrack;
             left.Controls.Add(_tracks, 0, 1);
             left.Controls.Add(Actions(Button("刷新", RefreshTracks), Button("预览", PreviewTrack),
-                Button("编辑副本", EditTrack), Button("加入关卡队列", UseTrackInQueue, true)), 0, 2);
+                Button("Visual edit...", EditTrack), Button("New formation...", CreateTrack, true),
+                Button("加入关卡队列", UseTrackInQueue)), 0, 2);
             split.Panel1.Controls.Add(left);
-            var right = Grid(2);
+            var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
+                Padding = new Padding(16), BackColor = Surface, AutoScroll = true };
+            right.RowStyles.Add(new RowStyle(SizeType.Absolute, 95));
+            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var filters = Grid(2);
+            filters.Padding = Padding.Empty;
+            filters.Margin = Padding.Empty;
+            filters.AutoScroll = false;
             _trackAccount.SelectedIndexChanged += (s, e) => { if (!_loading) { RefreshTracks(); ShowTrackSuccess(); } };
-            AddWide(right, Section("轨道记录"));
-            Row(right, "账号", _trackAccount);
-            Row(right, "关卡", _trackLevel);
-            _trackLevel.TextChanged += (s, e) => ShowTrackSuccess();
-            _tracks.SelectedIndexChanged += (s, e) => ShowTrackSuccess();
+            Row(filters, "账号", _trackAccount);
+            Row(filters, "关卡", _trackLevel);
+            right.Controls.Add(filters, 0, 0);
+            var trackDirectory = AssistantOptions.Parse(new string[0]).ResolveTrackDir();
+            if (trackDirectory != null)
+                _trackLevel.Items.AddRange(LevelCatalog.Load(Path.Combine(trackDirectory, "附加程序", "文本", "普通关卡.txt"))
+                    .Select(l => (object)l.ToString()).ToArray());
+            _trackLevel.TextChanged += (s, e) => { if (!_loading) { RefreshTracks(); ShowTrackSuccess(); } };
+            _showAllTracks.CheckedChanged += (s, e) => RefreshTracks();
+            _tracks.SelectedIndexChanged += (s, e) =>
+            {
+                if (_refreshingTracks) return;
+                if (_tracks.SelectedItem is string path && _state.TrackLevels.TryGetValue(Path.GetFullPath(path), out var target))
+                {
+                    _loading = true;
+                    _trackLevel.Text = target;
+                    _loading = false;
+                }
+                ShowTrackSuccess();
+                RefreshTrackBoard();
+            };
             _success.CheckedChanged += (s, e) => SaveTrackSuccess();
-            AddWide(right, Hint("填写关卡，例如 美味/曲奇。通关标记按账号、关卡和轨道分别保存。"));
-            AddWide(right, _success);
-            AddWide(right, Hint("任务成功结束后会自动标记。预制轨道只读；“编辑副本”会在当前账号目录创建可修改的副本。"));
+            right.Controls.Add(Actions(_showAllTracks, _success), 0, 1);
+            _trackBoard.Dock = DockStyle.Fill;
+            right.Controls.Add(_trackBoard, 0, 2);
+            _trackSummary.Margin = new Padding(0, 8, 0, 0);
+            right.Controls.Add(_trackSummary, 0, 3);
             split.Panel2.Controls.Add(right);
             return split;
         }
@@ -438,6 +491,15 @@ namespace FvmAssistant.Controller
             if (_trackAccount.SelectedItem is AccountEntry account) _queueAccount.SelectedItem = account;
             _queueTrack.Text = path;
             if (!string.IsNullOrWhiteSpace(_trackLevel.Text)) _queueLevel.Text = _trackLevel.Text;
+            if (_trackAccount.SelectedItem is AccountEntry selected)
+            {
+                var known = new HashSet<string>(new CardLibrary(new AppPaths(selected.Profile).Cards).Names);
+                var remembered = PanelSettings.Load(new AppPaths(selected.Profile).PanelSettings).CardMap;
+                _queueCards.Text = string.Join(",", TrackContext(path).DeckCards.Select(c =>
+                    (track: c.Name, mine: known.Contains(c.Name) ? c.Name :
+                        remembered.TryGetValue(c.Name, out var name) && known.Contains(name) ? name : null))
+                    .Where(c => c.mine != null).Select(c => c.track + ":" + c.mine));
+            }
             _tabs.SelectedIndex = 2;
             _queueCards.Focus();
         }
@@ -487,6 +549,7 @@ namespace FvmAssistant.Controller
             _state.Save();
             RefreshAccounts();
             _accounts.SelectedItem = account;
+            _accountWorkspace.SelectedIndex = 1;
             _profile.Focus();
             _profile.SelectAll();
         }
@@ -614,10 +677,11 @@ namespace FvmAssistant.Controller
                     return;
                 if (Uri.TryCreate(url, UriKind.Absolute, out var parsed) &&
                     parsed.Host == "my.4399.com" && parsed.AbsolutePath.EndsWith("/wd-air", StringComparison.OrdinalIgnoreCase) &&
-                    !LocalClient.Flag(status, "loading"))
+                    LocalClient.Flag(status, "browserReady") && LocalClient.Flag(status, "rendererReady"))
                 {
                     try
                     {
+                        // Background page requests can keep loading=true after the visible controls are ready.
                         await LocalClient.GetAsync(account.Port, "/portal",
                             new Dictionary<string, string> { ["state"] = "select", ["server"] = account.Server }, 20000);
                         Log(account.Profile + " 已进入服务器 " + account.Server + "。");
@@ -635,10 +699,52 @@ namespace FvmAssistant.Controller
 
         private void RefreshCards()
         {
+            foreach (var icon in _cardIcons.Values) icon.Dispose();
+            _cardIcons.Clear();
             _cards.Items.Clear();
             if (SelectedAccount == null) return;
-            var folder = new AppPaths(SelectedAccount.Profile).Cards;
-            foreach (var file in Directory.GetFiles(folder, "*.png")) _cards.Items.Add(Path.GetFileNameWithoutExtension(file));
+            var library = new CardLibrary(new AppPaths(SelectedAccount.Profile).Cards);
+            foreach (var name in library.Names)
+            {
+                _cards.Items.Add(name);
+                _cardIcons[name] = library.Get(name).ToBitmap();
+            }
+        }
+
+        private void DrawLibraryCard(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0) return;
+            e.DrawBackground();
+            var name = (string)_cards.Items[e.Index];
+            if (_cardIcons.TryGetValue(name, out var icon))
+                e.Graphics.DrawImage(icon, new Rectangle(e.Bounds.Left + 5, e.Bounds.Top + 2, 42, 50));
+            TextRenderer.DrawText(e.Graphics, name, Font,
+                new Rectangle(e.Bounds.Left + 57, e.Bounds.Top, e.Bounds.Width - 60, e.Bounds.Height),
+                (e.State & DrawItemState.Selected) != 0 ? SystemColors.HighlightText : Ink,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            e.DrawFocusRectangle();
+        }
+
+        private async Task ScanInventoryAsync()
+        {
+            var account = SelectedAccount ?? throw new InvalidOperationException("Select an account first.");
+            if (!await IsGameOpenAsync(account)) throw new InvalidOperationException("Open the account's game window and its 背包 defense-card page first.");
+            var paths = new AppPaths(account.Profile);
+            using (var dialog = new InventoryScanDialog(async () =>
+            {
+                var response = await LocalClient.GetAsync(account.Port, "/inventory", new Dictionary<string, string> { ["state"] = "capture" });
+                using (var stream = new MemoryStream(Convert.FromBase64String(LocalClient.Value(response, "png"))))
+                using (var bitmap = new Bitmap(stream))
+                    return new InventorySnapshot { Id = LocalClient.Value(response, "id"),
+                        Frame = StageFrame.FromBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)) };
+            }, async (id, items, replace) =>
+            {
+                await LocalClient.GetAsync(account.Port, "/inventory", new Dictionary<string, string>
+                { ["state"] = "learn", ["id"] = id, ["items64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(Json.Serialize(items))),
+                    ["replace"] = replace ? "1" : "0" });
+            }, new CardLibrary(paths.Cards), Path.Combine(paths.AccountRoot, "inventory-grid.json")))
+                dialog.ShowDialog(this);
+            RefreshCards();
         }
 
         private void DeleteCard()
@@ -663,22 +769,85 @@ namespace FvmAssistant.Controller
 
         private void RefreshTracks()
         {
-            var old = _tracks.SelectedItem as string;
-            _tracks.Items.Clear();
+            if (_refreshingTracks) return;
+            _refreshingTracks = true;
+            try
+            {
+                var old = _tracks.SelectedItem as string;
+                _tracks.Items.Clear();
+                var directory = AssistantOptions.Parse(new string[0]).ResolveTrackDir();
+                var preset = directory == null ? null : Path.Combine(directory, "预制轨道");
+                var level = SelectedTrackLevel();
+                var trackAccount = _trackAccount.SelectedItem as AccountEntry;
+                if (trackAccount != null)
+                {
+                    var paths = new AppPaths(trackAccount.Profile);
+                    foreach (var personal in new[] { paths.EditedTracks, paths.Tracks })
+                        foreach (var file in Directory.GetFiles(personal, "*.txt", SearchOption.AllDirectories).OrderBy(p => p)
+                            .Where(p => _showAllTracks.Checked || level == null ||
+                                (_state.TrackLevels.TryGetValue(Path.GetFullPath(p), out var target)
+                                    ? target == level.ToString() : Path.GetFileNameWithoutExtension(p).Contains(level.Name))))
+                            _tracks.Items.Add(file);
+                }
+                if (preset != null && Directory.Exists(preset))
+                    foreach (var file in Directory.GetFiles(preset, "*.txt", SearchOption.AllDirectories).OrderBy(p => p)
+                        .Where(p => _showAllTracks.Checked || level == null ||
+                            (Path.GetFileNameWithoutExtension(p).Contains(level.Name) &&
+                             Path.GetFileName(Path.GetDirectoryName(p)).TrimStart("0123456789".ToCharArray()) == level.Island)))
+                        _tracks.Items.Add(file);
+                if (old != null) _tracks.SelectedItem = old;
+                if (_tracks.SelectedIndex < 0 && _tracks.Items.Count > 0) _tracks.SelectedIndex = 0;
+            }
+            finally { _refreshingTracks = false; }
+            ShowTrackSuccess();
+            RefreshTrackBoard();
+        }
+
+        private LevelEntry SelectedTrackLevel()
+        {
+            var directory = AssistantOptions.Parse(new string[0]).ResolveTrackDir();
+            if (directory == null || string.IsNullOrWhiteSpace(_trackLevel.Text)) return null;
+            return LevelCatalog.Find(LevelCatalog.Load(Path.Combine(directory, "附加程序", "文本", "普通关卡.txt")), _trackLevel.Text);
+        }
+
+        private TrackPreflight TrackContext(string path)
+        {
             var directory = AssistantOptions.Parse(new string[0]).ResolveTrackDir();
             var preset = directory == null ? null : Path.Combine(directory, "预制轨道");
-            if (preset != null && Directory.Exists(preset))
-                foreach (var file in Directory.GetFiles(preset, "*.txt", SearchOption.AllDirectories).OrderBy(p => p))
-                    _tracks.Items.Add(file);
-            var trackAccount = _trackAccount.SelectedItem as AccountEntry;
-            if (trackAccount != null)
+            return new TrackPreflight(TrackFile.Load(path), preset == null ? null : CarrierMap.Find(preset, SelectedTrackLevel(), path),
+                directory == null ? null : FlameReader.Load(directory));
+        }
+
+        private void RefreshTrackBoard()
+        {
+            foreach (var icon in _trackIcons.Values) icon.Dispose();
+            _trackIcons.Clear();
+            if (!(_tracks.SelectedItem is string path))
             {
-                var paths = new AppPaths(trackAccount.Profile);
-                foreach (var personal in new[] { paths.Tracks, paths.EditedTracks })
-                    foreach (var file in Directory.GetFiles(personal, "*.txt", SearchOption.AllDirectories).OrderBy(p => p))
-                        _tracks.Items.Add(file);
+                _trackBoard.ShowFormation(null, null, null);
+                _trackSummary.Text = "Choose a stage and select a track, or create a new formation.";
+                return;
             }
-            if (old != null) _tracks.SelectedItem = old;
+            try
+            {
+                var plan = TrackContext(path);
+                if (_trackAccount.SelectedItem is AccountEntry account)
+                {
+                    var library = new CardLibrary(new AppPaths(account.Profile).Cards);
+                    var known = new HashSet<string>(library.Names);
+                    foreach (var name in plan.DeckCards.Select(c => c.Name).Distinct().Where(known.Contains))
+                        _trackIcons[name] = library.Get(name).ToBitmap();
+                }
+                _trackBoard.ShowFormation(plan.Track, plan.DeckCards, plan.Carriers, _trackIcons);
+                var report = plan.Inspect(deckLimit: DeckBuilder.DeckSlots);
+                _trackSummary.Text = Path.GetFileNameWithoutExtension(path) + "  |  " + plan.DeckCards.Count + " cards" +
+                    Environment.NewLine + (report.CanStart ? "Opening formation compatible." : "Open the editor to review compatibility errors.");
+            }
+            catch (Exception error) when (error is IOException || error is FormatException || error is ArgumentException || error is InvalidOperationException)
+            {
+                _trackBoard.ShowFormation(null, null, null);
+                _trackSummary.Text = error.Message;
+            }
         }
 
         private void PreviewTrack()
@@ -686,7 +855,7 @@ namespace FvmAssistant.Controller
             if (!(_tracks.SelectedItem is string path)) return;
             try
             {
-                var preflight = new TrackPreflight(TrackFile.Load(path), null);
+                var preflight = TrackContext(path);
                 using (var preview = new TrackPreviewDialog(preflight, preflight.DeckCards.Select(c => c.Name))) preview.ShowDialog(this);
             }
             catch (Exception error) { MessageBox.Show(this, error.Message, "轨道预览"); }
@@ -695,12 +864,32 @@ namespace FvmAssistant.Controller
         private void EditTrack()
         {
             if (!(_tracks.SelectedItem is string path)) return;
+            OpenTrackEditor(path);
+        }
+
+        private void CreateTrack()
+        {
+            if (SelectedTrackLevel() == null) throw new InvalidOperationException("Choose a valid stage before creating a formation.");
+            OpenTrackEditor(null);
+        }
+
+        private void OpenTrackEditor(string path)
+        {
             try
             {
-                var account = _trackAccount.SelectedItem as AccountEntry;
-                var saveRoot = account == null ? null : new AppPaths(account.Profile).EditedTracks;
-                using (var editor = new TrackEditorDialog(path, null, saveRoot)) editor.ShowDialog(this);
-                RefreshTracks();
+                var account = _trackAccount.SelectedItem as AccountEntry ?? throw new InvalidOperationException("Select an account first.");
+                var paths = new AppPaths(account.Profile);
+                var directory = AssistantOptions.Parse(new string[0]).ResolveTrackDir();
+                var carriers = directory == null ? null : CarrierMap.Find(Path.Combine(directory, "预制轨道"), SelectedTrackLevel(), path);
+                using (var editor = new TrackEditorDialog(path, carriers, paths.EditedTracks, new CardLibrary(paths.Cards), _trackLevel.Text))
+                {
+                    editor.ShowDialog(this);
+                    if (editor.SavedPath == null) return;
+                    if (SelectedTrackLevel() is LevelEntry level) _state.TrackLevels[Path.GetFullPath(editor.SavedPath)] = level.ToString();
+                    _state.Save();
+                    RefreshTracks();
+                    _tracks.SelectedItem = editor.SavedPath;
+                }
             }
             catch (Exception error) { MessageBox.Show(this, error.Message, "轨道编辑"); }
         }
@@ -1065,6 +1254,16 @@ namespace FvmAssistant.Controller
             if (IsDisposed) return;
             if (InvokeRequired) { BeginInvoke(new Action<string>(Log), message); return; }
             _log.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + message + Environment.NewLine);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                foreach (var icon in _cardIcons.Values) icon.Dispose();
+                foreach (var icon in _trackIcons.Values) icon.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }

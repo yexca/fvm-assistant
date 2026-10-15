@@ -131,9 +131,17 @@ namespace FvmAssistant.Panel
             _editTrack = new Button { Text = "编辑轨道副本…", AutoSize = true, Enabled = false };
             _editTrack.Click += (s, e) => EditTrack();
             trackTools.Controls.Add(_editTrack);
+            var createTrack = new Button { Text = "New formation...", AutoSize = true };
+            createTrack.Click += (s, e) => CreateTrack();
+            trackTools.Controls.Add(createTrack);
+            _inputs.Add(createTrack);
             Add(trackTools);
 
-            var learnRow = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty, WrapContents = false };
+            var learnRow = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty, WrapContents = true };
+            var inventory = new Button { Text = "Scan 背包...", AutoSize = true };
+            inventory.Click += async (s, e) => await LearnInventoryAsync();
+            learnRow.Controls.Add(inventory);
+            _inputs.Add(inventory);
             _learn = new Button { Text = "学习当前卡组…", AutoSize = true };
             _learn.Click += async (s, e) => await LearnDeckAsync();
             var cardsFolder = new LinkLabel { Text = "图标文件夹", AutoSize = true, Margin = new Padding(8, 8, 0, 0) };
@@ -380,13 +388,46 @@ namespace FvmAssistant.Panel
         private void EditTrack()
         {
             if (_loadedTrack?.Path == null) return;
-            using (var editor = new TrackEditorDialog(_loadedTrack.Path, _preflight?.Carriers, _grind.EditedTrackDir))
+            using (var editor = new TrackEditorDialog(_loadedTrack.Path, _preflight?.Carriers, _grind.EditedTrackDir,
+                _grind.Cards, (_level.SelectedItem as LevelItem)?.Entry?.ToString()))
             {
                 editor.ShowDialog(this);
                 if (editor.SavedPath == null) return;
                 _track.Text = editor.SavedPath;
                 OnTrackChanged();
             }
+        }
+
+        private void CreateTrack()
+        {
+            try
+            {
+                var level = (_level.SelectedItem as LevelItem)?.Entry;
+                if (level == null) throw new InvalidOperationException("Choose a stage before creating a formation.");
+                var carriers = CarrierMap.Find(_grind.PresetTrackDir, level, null);
+                using (var editor = new TrackEditorDialog(null, carriers, _grind.EditedTrackDir, _grind.Cards, level.ToString()))
+                {
+                    editor.ShowDialog(this);
+                    if (editor.SavedPath == null) return;
+                    _track.Text = editor.SavedPath;
+                    OnTrackChanged();
+                }
+            }
+            catch (Exception error) { MessageBox.Show(this, error.Message, "Create a stage formation"); }
+        }
+
+        private System.Threading.Tasks.Task LearnInventoryAsync()
+        {
+            try
+            {
+                using (var dialog = new InventoryScanDialog(_grind.CaptureInventoryAsync,
+                    async (id, items, replace) => { await _grind.LearnInventoryAsync(id, items, replace); },
+                    _grind.Cards, _grind.InventoryGridPath)) dialog.ShowDialog(this);
+                _loadedTrack = null;
+                OnTrackChanged();
+            }
+            catch (Exception error) { MessageBox.Show(this, error.Message, "Inventory card library"); }
+            return System.Threading.Tasks.Task.CompletedTask;
         }
 
         private void RebuildCardRows(string problem = null)
@@ -443,7 +484,7 @@ namespace FvmAssistant.Panel
             var notes = new List<string>();
             if (used.Count == 0) notes.Add("这条轨道没有放卡步骤");
             if (_loadedTrack.Waves.Count > 1) notes.Add($"有 {_loadedTrack.Waves.Count - 1} 个按波变阵段落，目前只执行开局段");
-            if (learned.Count == 0) notes.Add("还没有学习过卡片：进房间配好卡组后点“学习当前卡组”");
+            if (learned.Count == 0) notes.Add("No learned cards yet. Open 背包 and use Scan 背包, or learn a room deck.");
             notes.Add("卡组按上面的顺序组成，选“不带”的卡跳过");
             _cardsHint.Text = string.Join("\n", notes);
             UpdateCompatibility();

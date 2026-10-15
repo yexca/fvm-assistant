@@ -72,9 +72,15 @@ namespace FvmAssistant.Tests
                 Test("synchronized timing pauses for ordinary placements", SynchronizedTiming);
                 Test("track card rate limit accepts only the declared attempt cadence", PlantSpeed);
                 Test("step editor preserves source lines and supports undo, redo and copy save", TrackEditing);
+                Test("inventory grid rejects overlap and clipping before any learning", InventoryCalibration);
+                Test("inventory alignment needs distinct known icons and an unambiguous offset", InventoryAlignment);
                 Test("room scrolling waits for a delayed rendered list before declaring its end", DeckScrollDelay);
                 Test("late remembered room decks rebuild once and never start with extra cards", DelayedRoomDeck);
+                Test("inventory learning saves reviewed pixels and rejects stale or invalid batches", InventoryLearning);
+                Test("new formations paint and erase exact times with coherent card counts and undo", FormationEditing);
                 Test("track editor and board preview construct on a WinForms UI thread", TrackEditorUi);
+                Test("formation board and inventory scanner support attended editing without game input", FormationWorkflowUi);
+                Test("fast formation drags paint crossed cells and erase only the selected time", FormationDragUi);
                 Test("effective deck includes inherited and fixed support across stage changes", EffectiveSupportDeck);
                 Test("malformed support data cannot bypass preflight", InvalidSupportData);
                 Test("controller rejects incompatible tracks before browser or card access", StartPreflight);
@@ -544,6 +550,61 @@ namespace FvmAssistant.Tests
             Check(rejected, "The editor cannot replace a source outside its private output folder");
         }
 
+        private static void InventoryCalibration()
+        {
+            var grid = new InventoryGrid { X = 4, Y = 5, Columns = 2, Rows = 2, PitchX = 49, PitchY = 57 };
+            var regions = grid.Regions(new Size(100, 115));
+            Check(regions.Count == 4 && regions[3] == new Rectangle(53, 62, 42, 50),
+                "Inventory crops must retain native room-icon dimensions and row-major order");
+            foreach (var invalid in new[] {
+                new InventoryGrid { Columns = 0 }, new InventoryGrid { PitchX = 41 },
+                new InventoryGrid { PitchY = 49 }, new InventoryGrid { X = -1 },
+                new InventoryGrid { X = 60, Columns = 2 }, new InventoryGrid { Rows = int.MaxValue },
+                new InventoryGrid { X = int.MaxValue } })
+            {
+                bool refused = false;
+                try { invalid.Regions(new Size(100, 115)); } catch (ArgumentException) { refused = true; }
+                Check(refused, "Invalid inventory grids must fail instead of cropping clipped or overlapping images");
+            }
+        }
+
+        private static void InventoryAlignment()
+        {
+            var exact = new InventoryGrid { X = 40, Y = 60, Columns = 2, Rows = 1 };
+            var frame = Frame(Color.Black, bitmap =>
+            {
+                var random = new Random(271);
+                foreach (var region in exact.Regions(bitmap.Size))
+                    for (int y = region.Top; y < region.Bottom; y++)
+                        for (int x = region.Left; x < region.Right; x++)
+                            bitmap.SetPixel(x, y, Color.FromArgb(random.Next(256), random.Next(256), random.Next(256)));
+            });
+            var known = exact.Regions(new Size(frame.Width, frame.Height)).Select(frame.Crop).ToList();
+            var approximate = new InventoryGrid { X = 41, Y = 61, Columns = 2, Rows = 1 };
+            var aligned = approximate.AlignToKnown(frame, known);
+            Check(aligned.X == 40 && aligned.Y == 60 && approximate.X == 41 && approximate.Y == 61,
+                "Two independent icon anchors must correct a one-pixel offset without mutating the supplied calibration");
+            Check(ReferenceEquals(exact, exact.AlignToKnown(frame, known)), "Correct calibration must remain unchanged");
+            Check(ReferenceEquals(approximate, approximate.AlignToKnown(frame, known.Take(1).ToList())),
+                "A single known icon cannot justify moving the whole grid");
+            Check(ReferenceEquals(approximate, approximate.AlignToKnown(Frame(Color.White), known)),
+                "A page with no known anchors must retain manual calibration");
+            var ambiguous = Frame(Color.Black, bitmap =>
+            {
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.FillRectangle(Brushes.Red, 38, 58, 50, 56);
+                    graphics.FillRectangle(Brushes.Blue, 88, 58, 52, 56);
+                }
+            });
+            var flatIcons = exact.Regions(new Size(frame.Width, frame.Height)).Select(ambiguous.Crop).ToList();
+            Check(ReferenceEquals(approximate, approximate.AlignToKnown(ambiguous, flatIcons)),
+                "Several equally supported offsets must not silently change calibration");
+            var edge = new InventoryGrid { X = 0, Y = 0, Columns = 2 };
+            Check(ReferenceEquals(edge, edge.AlignToKnown(frame, known)),
+                "Searching near a frame boundary must skip invalid offsets without clipped crops");
+        }
+
         private static void DeckScrollDelay()
         {
             var io = new DelayedScrollIo
@@ -633,6 +694,211 @@ namespace FvmAssistant.Tests
             public void Reload() { }
             public DateTime LastPageLoadUtc => DateTime.MinValue;
             public void Repaint() { }
+        }
+
+        private static void InventoryLearning()
+        {
+            var library = new CardLibrary(Path.Combine(_scratch, "inventory-cards"));
+            var session = new InventoryLearningSession();
+            var now = DateTime.UtcNow;
+            var original = Frame(Color.DarkRed);
+            var captured = session.Capture(original, now);
+            var firstId = captured.Id;
+            captured = session.Capture(Frame(Color.DarkBlue), now.AddSeconds(1));
+            var items = new[] { new InventorySelection { Name = "Card", X = 0, Y = 0 } };
+            bool refused = false;
+            try { session.Save(firstId, items, library, false, now.AddSeconds(2)); }
+            catch (InvalidOperationException) { refused = true; }
+            Check(refused && library.Names.Count == 0, "A newer capture must invalidate the previous review token");
+            foreach (var invalid in new[] {
+                new InventorySelection { Name = "../outside", X = 50, Y = 0 },
+                new InventorySelection { Name = "Other", X = 940, Y = 0 },
+                new InventorySelection { Name = "card", X = 50, Y = 0 },
+                new InventorySelection { Name = "CON", X = 50, Y = 0 },
+                new InventorySelection { Name = "Bad,variant", X = 50, Y = 0 },
+                new InventorySelection { Name = "Outside", X = int.MaxValue, Y = 0 },
+                new InventorySelection { Name = "Other", X = 0, Y = 0 } })
+            {
+                refused = false;
+                try { session.Save(captured.Id, new[] { items[0], invalid }, library, false, now.AddSeconds(2)); }
+                catch (ArgumentException) { refused = true; }
+                Check(refused && library.Names.Count == 0, "An invalid later selection must not save earlier icons");
+            }
+            refused = false;
+            try { session.Save(captured.Id, items, library, false, now.AddMinutes(11)); }
+            catch (InvalidOperationException) { refused = true; }
+            Check(refused, "Old capture tokens must expire even without a newer capture");
+            session.Save(captured.Id, items, library, false, now.AddSeconds(2));
+            Check(library.Get("Card").MeanAbsDiff(captured.Frame.Crop(new Rectangle(0, 0, 42, 50))) == 0,
+                "Saved inventory icons must come from the reviewed snapshot without scaling");
+            captured = session.Capture(original, now.AddSeconds(3));
+            refused = false;
+            try { session.Save(captured.Id, new[] { new InventorySelection { Name = "New", X = 50, Y = 0 }, items[0] },
+                library, false, now.AddSeconds(4)); }
+            catch (InvalidOperationException) { refused = true; }
+            Check(refused && library.Names.Count == 1 && library.Get("Card").MeanAbsDiff(original.Crop(new Rectangle(0, 0, 42, 50))) > 0,
+                "Name collisions must not overwrite or partially add a batch without explicit replacement");
+            session.Save(captured.Id, items, library, true, now.AddSeconds(4));
+            Check(library.Get("Card").MeanAbsDiff(original.Crop(new Rectangle(0, 0, 42, 50))) == 0,
+                "Explicit replacement must update only the chosen account's card icon");
+        }
+
+        private static void FormationEditing()
+        {
+            var document = TrackEditDocument.CreateNew("美味/曲奇");
+            var initial = document.Text;
+            int line = document.AddCard("Producer", "7[3]补极");
+            document.PaintCell(line, new Cell(2, 3), "000", false);
+            document.PaintCell(line, new Cell(2, 3), "0", false);
+            document.PaintCell(line, new Cell(2, 4), "000", false);
+            Check(document.Track.Opening.Cards[0].Steps.Count == 2 &&
+                new TrackPreflight(document.Track, null).Inspect().CanStart,
+                "Painting the same formation cell twice must be idempotent and create an executable track");
+            document.PaintCell(line, new Cell(2, 3), "000", true);
+            document.Undo();
+            Check(document.Track.Opening.Cards[0].Steps.Count == 2, "Undo must restore an erased board cell");
+            document.SetHeader("优先队列", "Producer,Producer");
+            line = document.Track.Opening.Cards[0].SourceLine;
+            document.RemoveCard(line);
+            Check(document.Track.Header["卡槽数"] == "0" && document.Track.PriorityQueue.Count == 0,
+                "Removing a card must atomically update its deck count and priority references");
+            document.Undo();
+            Check(document.Track.Header["卡槽数"] == "1" && document.Track.PriorityQueue.Count == 2,
+                "One undo must restore the entire removed card and its metadata");
+            while (document.CanUndo) document.Undo();
+            Check(document.Text == initial, "A new formation must undo back to its empty seed");
+
+            const string source = "注释=preserve\n卡槽数=1\nTimed\t7[3]补\t010|00\t000|11\t035.5|11\tbad-field\n--第1波--\nLater\t7[3]独\t020|22";
+            document = new TrackEditDocument(null, source);
+            document.PaintCell(3, new Cell(1, 1), "035.5", true);
+            Check(document.Text.Contains("010|00\t000|11\tbad-field") && document.Text.EndsWith("Later\t7[3]独\t020|22"),
+                "Erasing one timed placement must preserve time-zero cells, 00 events, damaged fields and later waves");
+            int added = document.AddCard("New", "7[3]补极");
+            Check(document.Track.Opening.Cards.Last().SourceLine == added && document.Track.Header["卡槽数"] == "2",
+                "Added cards must enter the opening before a later-wave section");
+            bool refused = false;
+            try { document.AddCard("new", "7[3]补极"); } catch (ArgumentException) { refused = true; }
+            Check(refused, "A duplicate card row must not be created by the visual editor");
+        }
+
+        private static void FormationWorkflowUi()
+        {
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var library = new CardLibrary(Path.Combine(_scratch, "ui-inventory-cards"));
+                    var frame = Frame(Color.DarkCyan);
+                    library.Save("日光炉", frame.Crop(new Rectangle(4, 5, 42, 50)));
+                    var session = new InventoryLearningSession();
+                    using (var scanner = new InventoryScanDialog(() => Task.FromResult(session.Capture(frame, DateTime.UtcNow)),
+                        (id, items, replace) => { session.Save(id, items, library, replace, DateTime.UtcNow); return Task.CompletedTask; },
+                        library, Path.Combine(_scratch, "ui-inventory-grid.json")))
+                    {
+                        Check(scanner.Handle != IntPtr.Zero, "Inventory review must create a WinForms handle");
+                        ((Task)Call(scanner, "CapturePageAsync")).GetAwaiter().GetResult();
+                        ((System.Windows.Forms.NumericUpDown)Get(scanner, "_x")).Value = 4;
+                        ((System.Windows.Forms.NumericUpDown)Get(scanner, "_y")).Value = 5;
+                        Call(scanner, "ScanGrid");
+                        var rows = ((System.Windows.Forms.DataGridView)Get(scanner, "_candidates")).Rows;
+                        Check(rows.Count == 1 && Convert.ToString(rows[0].Cells[2].Value) == "日光炉",
+                            "Known inventory icons must be suggested using the local library");
+                        Check(!Convert.ToBoolean(rows[0].Cells[0].Value), "Known icon suggestions must still require the user to choose Add");
+                        rows[0].Cells[2].Value = "日光炉-test";
+                        ((Task)Call(scanner, "SaveCardsAsync")).GetAwaiter().GetResult();
+                        Check(library.Names.Contains("日光炉-test"), "Reviewed inventory names must save through the shared learning session");
+                    }
+                    using (var editor = new TrackEditorDialog(null, null, Path.Combine(_scratch, "ui-formations"), library, "美味/曲奇"))
+                    {
+                        Check(editor.Handle != IntPtr.Zero, "New formations must create a WinForms handle");
+                        ((System.Windows.Forms.ComboBox)Get(editor, "_newCard")).Text = "日光炉";
+                        Call(editor, "AddCard");
+                        Call(editor, "PaintBoard", new Cell(4, 5), System.Windows.Forms.MouseButtons.Left);
+                        var document = (TrackEditDocument)Get(editor, "_document");
+                        Check(document.Track.Opening.Cards[0].FormationCells.Single().ToString() == "45",
+                            "The selected learned card must paint the requested board cell");
+                        ((System.Windows.Forms.ComboBox)Get(editor, "_tool")).SelectedIndex = 2;
+                        Call(editor, "PaintBoard", new Cell(3, 2), System.Windows.Forms.MouseButtons.Left);
+                        Check(document.Track.Player1Cells.Single().ToString() == "32", "The character tool must update the actual track header");
+                        var board = (TrackBoardControl)Get(editor, "_board");
+                        board.Size = new Size(587, 431);
+                        for (int row = 1; row <= 7; row++)
+                            for (int col = 1; col <= 9; col++)
+                            {
+                                var tile = (Rectangle)Call(board, "Tile", new Cell(row, col));
+                                Check(board.CellAt(tile.Location)?.ToString() == row.ToString() + col,
+                                    "Every tile's top-left pixel must resolve to that cell at fractional board sizes");
+                            }
+                        Check(!board.CellAt(Point.Empty).HasValue && !board.CellAt(new Point(board.Width, board.Height)).HasValue,
+                            "Board labels and outer margins must never produce playable cells");
+                        Check(new TrackPreflight(document.Track, null).Inspect().CanStart, "A basic visual formation must pass the existing run preflight");
+                    }
+                }
+                catch (Exception error) { failure = error; }
+            }) { IsBackground = true };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Check(thread.Join(15000), "Attended editor workflow timed out");
+            if (failure != null) throw failure;
+        }
+
+        private static void FormationDragUi()
+        {
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var editor = new TrackEditorDialog(null, null))
+                    {
+                        Check(editor.Handle != IntPtr.Zero, "The drag editor must have a native handle");
+                        ((System.Windows.Forms.ComboBox)Get(editor, "_newCard")).Text = "Card";
+                        Call(editor, "AddCard");
+                        var board = (TrackBoardControl)Get(editor, "_board");
+                        board.Size = new Size(587, 431);
+                        Check(board.Handle != IntPtr.Zero, "The painting board must have a native handle");
+                        Action<Cell, Cell, System.Windows.Forms.MouseButtons> drag = (from, to, button) =>
+                        {
+                            var start = (Rectangle)Call(board, "Tile", from);
+                            var end = (Rectangle)Call(board, "Tile", to);
+                            Call(board, "OnMouseDown", new System.Windows.Forms.MouseEventArgs(button, 1,
+                                start.Left + start.Width / 2, start.Top + start.Height / 2, 0));
+                            var move = new System.Windows.Forms.MouseEventArgs(button, 0,
+                                end.Left + end.Width / 2, end.Top + end.Height / 2, 0);
+                            Call(board, "OnMouseMove", move);
+                            Call(board, "OnMouseMove", move);
+                            Call(board, "OnMouseUp", move);
+                        };
+                        drag(new Cell(1, 2), new Cell(7, 2), System.Windows.Forms.MouseButtons.Left);
+                        var document = (TrackEditDocument)Get(editor, "_document");
+                        Check(document.Track.Opening.Cards[0].FormationCells.Select(c => c.ToString())
+                            .SequenceEqual(Enumerable.Range(1, 7).Select(r => r + "2")),
+                            "A single distant mouse move must paint all seven crossed cells without duplicates");
+                        ((System.Windows.Forms.TextBox)Get(editor, "_time")).Text = "035.5";
+                        Call(editor, "PaintBoard", new Cell(4, 2), System.Windows.Forms.MouseButtons.Left);
+                        ((System.Windows.Forms.TextBox)Get(editor, "_time")).Text = "000";
+                        drag(new Cell(7, 2), new Cell(1, 2), System.Windows.Forms.MouseButtons.Right);
+                        var timed = document.Track.Opening.Cards[0].Steps.Single();
+                        Check(timed.Cell.ToString() == "42" && timed.TimeDeciseconds == 355,
+                            "Reverse erasing must remove the complete opening column and preserve a later placement");
+                        drag(new Cell(1, 1), new Cell(7, 9), System.Windows.Forms.MouseButtons.Left);
+                        var diagonal = document.Track.Opening.Cards[0].Steps.Where(s => s.TimeDeciseconds == 0)
+                            .Select(s => s.Cell).ToList();
+                        Check(diagonal.Count == 9 && diagonal.First().ToString() == "11" && diagonal.Last().ToString() == "79",
+                            "A fast diagonal drag must include both endpoints and a continuous path");
+                        for (int i = 1; i < diagonal.Count; i++)
+                            Check(Math.Abs(diagonal[i].Row - diagonal[i - 1].Row) <= 1 &&
+                                Math.Abs(diagonal[i].Col - diagonal[i - 1].Col) <= 1,
+                                "Diagonal painting must not leave gaps between cells");
+                    }
+                }
+                catch (Exception error) { failure = error; }
+            }) { IsBackground = true };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Check(thread.Join(15000), "Formation drag workflow timed out");
+            if (failure != null) throw failure;
         }
 
         private static void TrackEditorUi()

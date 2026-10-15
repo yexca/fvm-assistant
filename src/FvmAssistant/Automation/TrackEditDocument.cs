@@ -25,6 +25,85 @@ namespace FvmAssistant.Automation
         public bool CanRedo => _redo.Count > 0;
         public TrackFile Track => TrackFile.Parse(_text);
 
+        public static TrackEditDocument CreateNew(string level)
+        {
+            if (level != null && level.IndexOfAny(new[] { '\r', '\n', '\t' }) >= 0)
+                throw new ArgumentException("A stage name must be a single line.");
+            return new TrackEditDocument(null, "注释=Custom formation" +
+                (string.IsNullOrWhiteSpace(level) ? "" : " for " + level) +
+                "\n人物1位置=11\n卡槽数=0\n");
+        }
+
+        public int AddCard(string name, string spec)
+        {
+            name = (name ?? "").Trim();
+            CardLibrary.ValidateName(name);
+            if (name.IndexOfAny(new[] { ',', '，', '=', ';' }) >= 0)
+                throw new ArgumentException("Card names cannot contain track or mapping separators.");
+            ValidateSpec(spec);
+            var track = Track;
+            if (track.Opening.Cards.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("This card already has an opening row. Select it to edit its formation.");
+            var lines = _text.Replace("\r\n", "\n").Split('\n').ToList();
+            int at = lines.FindIndex(l => l.StartsWith("--第", StringComparison.Ordinal));
+            if (at < 0) at = lines.Count > 0 && lines[lines.Count - 1] == "" ? lines.Count - 1 : lines.Count;
+            lines.Insert(at, name + "\t" + spec);
+            UpdateDeckCount(lines);
+            Commit(string.Join("\n", lines));
+            return at + 1;
+        }
+
+        public void RemoveCard(int sourceLine)
+        {
+            FieldsAt(sourceLine);
+            var card = Track.Waves.SelectMany(w => w.Cards).First(c => c.SourceLine == sourceLine);
+            var lines = _text.Replace("\r\n", "\n").Split('\n').ToList();
+            lines.RemoveAt(sourceLine - 1);
+            UpdateDeckCount(lines);
+            var parsed = TrackFile.Parse(string.Join("\n", lines));
+            if (parsed.HeaderLines.TryGetValue("优先队列", out var priorityLine) &&
+                !parsed.Opening.Cards.Any(c => c.Name == card.Name))
+                lines[priorityLine - 1] = "优先队列=" + string.Join(",", parsed.PriorityQueue.Where(n => n != card.Name));
+            Commit(string.Join("\n", lines));
+        }
+
+        private static void UpdateDeckCount(List<string> lines)
+        {
+            var parsed = TrackFile.Parse(string.Join("\n", lines));
+            if (parsed.HeaderLines.TryGetValue("卡槽数", out var line))
+                lines[line - 1] = "卡槽数=" + parsed.Opening.DeckCards.Count();
+        }
+
+        /// <summary>Paint one placement at the current time; other times on the same cell stay intact.</summary>
+        public void PaintCell(int sourceLine, Cell cell, string time, bool erase)
+        {
+            var raw = ParseStep(time + "|" + cell);
+            var step = TrackFile.Parse("Card\t7[3]\t" + raw).Opening.Cards[0].Steps[0];
+            if (!step.HasCell) throw new ArgumentException("Choose a playable board cell.");
+            var fields = FieldsAt(sourceLine);
+            var card = Track.Waves.SelectMany(w => w.Cards).First(c => c.SourceLine == sourceLine);
+            bool exists = card.Steps.Any(s => s.TimeDeciseconds == step.TimeDeciseconds &&
+                s.Cell.Row == cell.Row && s.Cell.Col == cell.Col);
+            if (erase)
+            {
+                // Do not infer raw-field indices from parsed steps when damaged fields were omitted.
+                for (int i = fields.Count - 1; i >= 2; i--)
+                {
+                    var parsed = TrackFile.Parse("Card\t7[3]\t" + fields[i]);
+                    if (parsed.Diagnostics.Count == 0 && parsed.Opening.Cards[0].Steps.Count == 1)
+                    {
+                        var existing = parsed.Opening.Cards[0].Steps[0];
+                        if (existing.TimeDeciseconds == step.TimeDeciseconds &&
+                            existing.Cell.Row == cell.Row && existing.Cell.Col == cell.Col) fields.RemoveAt(i);
+                    }
+                }
+            }
+            else if (!exists) fields.Add(raw);
+            var lines = _text.Replace("\r\n", "\n").Split('\n');
+            lines[sourceLine - 1] = string.Join("\t", fields);
+            Commit(string.Join("\n", lines));
+        }
+
         public void SetHeader(string key, string value)
         {
             if (string.IsNullOrWhiteSpace(key) || key.IndexOfAny(new[] { '\r', '\n', '\t', '=' }) >= 0 ||
@@ -42,14 +121,19 @@ namespace FvmAssistant.Automation
 
         public void SetSpec(int sourceLine, string spec)
         {
-            if (spec == null || spec.IndexOfAny(new[] { '\r', '\n', '\t' }) >= 0 ||
-                TrackFile.Parse("Card\t" + spec).Diagnostics.Count > 0)
-                throw new FormatException("Expected cooldown[layer]flags[,conditions], for example 7[3]补极.");
+            ValidateSpec(spec);
             var lines = _text.Replace("\r\n", "\n").Split('\n');
             var fields = FieldsAt(sourceLine);
             fields[1] = spec;
             lines[sourceLine - 1] = string.Join("\t", fields);
             Commit(string.Join("\n", lines));
+        }
+
+        private static void ValidateSpec(string spec)
+        {
+            if (spec == null || spec.IndexOfAny(new[] { '\r', '\n', '\t' }) >= 0 ||
+                TrackFile.Parse("Card\t" + spec).Diagnostics.Count > 0)
+                throw new FormatException("Expected cooldown[layer]flags[,conditions], for example 7[3]补极.");
         }
 
         public void MoveStep(int sourceLine, int index, int direction)
