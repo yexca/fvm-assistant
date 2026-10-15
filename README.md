@@ -36,6 +36,12 @@ To use the Makefile, run `make help`, `make check`, or `make release`. `make che
 
 At first launch, log in manually and select a server. In off-screen mode, the right-hand automation panel can then select a stage, track, learned cards, and round count. The default control endpoint is on `127.0.0.1:18765`; `scripts\assistant.ps1 /help` lists its routes. Do not expose or forward that port.
 
+For Agent clients, `scripts/agent-mcp.ps1` provides a local stdio MCP bridge with
+account/resource discovery, solo-plan validation, identified background runs,
+progress queries, guarded stops and private game screenshots. It uses Windows
+PowerShell without an additional runtime. See [Agent setup and API](docs/agent-api.md)
+for startup arguments, tool schemas, request deduplication and operating limits.
+
 The separate controller window starts without a browser and is also the default when the executable is opened without arguments:
 
 ```powershell

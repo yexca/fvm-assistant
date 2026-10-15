@@ -27,6 +27,7 @@ namespace FvmAssistant
         private readonly SemaphoreSlim _captureLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _recordLock = new SemaphoreSlim(1, 1);
         private readonly GrindController _grind;
+        private readonly AgentApi _agent;
         private PluginInfo _flash;
         private Recorder _recorder;
 
@@ -36,11 +37,13 @@ namespace FvmAssistant
             _paths = paths;
             _options = options;
             _grind = grind;
+            _agent = new AgentApi(form, options, grind);
             _form.ToggleRecording = ToggleRecordingAsync;
         }
 
         public Task<object> HandleAsync(HttpRequest r)
         {
+            if (r.Path.StartsWith("/agent/v1/", StringComparison.Ordinal)) return _agent.HandleAsync(r);
             switch (r.Path.TrimEnd('/'))
             {
                 case "":
@@ -79,6 +82,7 @@ namespace FvmAssistant
             header = ControlServer.RequiredHeader + ": 1",
             endpoints = new[]
             {
+                "/agent/v1/state|levels|tracks|track|cards|validate|start|run|stop|capture   structured local Agent API; see docs/agent-api.md",
                 "/status[?full=1]",
                 "/frames[?full=1]",
                 "/locate                       find the Flash <embed>/<object> and remember its rect",

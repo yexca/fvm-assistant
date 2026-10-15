@@ -35,6 +35,11 @@ namespace FvmAssistant.Tests
             Directory.CreateDirectory(_scratch);
             try
             {
+                Test("Agent plans reject malformed mappings and preserve execution order", AgentTests.Plans);
+                Test("Agent request identity survives retries and rejects stale instances", AgentTests.RequestIdentity);
+                Test("Agent stops cannot affect a replacement run", AgentTests.StaleStop);
+                Test("Agent catalogs and preflight use synthetic account resources without browser input", () => AgentTests.Catalogs(_scratch));
+                Test("MCP stdio negotiates, validates and routes only to the configured local account", () => AgentTests.Mcp(_scratch));
                 Test("timed-only maps, aliases, explicit overrides and fixed support", CarrierDefaults);
                 Test("renderer failures block old frames until a new navigation and viewport paint", RendererRecovery);
                 Test("mission state distinguishes active, complete, claimed and unknown", MissionStates);

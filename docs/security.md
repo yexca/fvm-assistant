@@ -4,6 +4,15 @@ The game browser persists login state. New runtime state is in the ignored repos
 
 ## What may enter Git
 
+The local Agent bridge reads only controller account metadata for profile/port
+discovery. Its ordinary responses omit entry URLs, login storage, absolute runtime
+paths and raw logs; card names and plans may still be private. The explicit
+`capture_screen` tool returns private game pixels to the requesting MCP client
+without saving them. Do not share that tool output without review/redaction.
+Custom `-AccountsFile` metadata belongs outside Git. Agent HTTP routes retain
+the loopback and no-Origin policy; the required header does not authenticate
+other local processes. See [Agent operating limits](agent-api.md).
+
 Source code, documentation, small source-owned UI templates, the local Flash test page, and build/check scripts may be staged after review. `vendor/`, `sample/`, `bin/`, and `obj/` must remain local. The Flash DLL and track editor package/data are third-party material and are intentionally ignored. Do not force-add them. Also exclude credentials, private keys, `.env` files, profile data, captures, recordings, and logs.
 
 The `.gitignore` excludes `.fvm-data/` from ordinary staging. `scripts/check-secrets.ps1` checks both forbidden paths and high-confidence token formats. `make secrets` scans tracked plus untracked, non-ignored working files. `make check-staged` reads the exact Git index blobs, including staged versions that differ from the working tree. The repository-local `.githooks/pre-commit` runs the staged check when enabled with `make install-hooks` (equivalent to `git config --local core.hooksPath .githooks`). The hook is a local guardrail; it does not install itself on other clones.

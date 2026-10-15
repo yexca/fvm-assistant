@@ -11,7 +11,7 @@ if (-not $compiler) { throw 'Visual Studio C# compiler was not found.' }
 $app = Join-Path $buildDir 'FvmAssistant.exe'
 if (-not (Test-Path -LiteralPath $app)) { throw 'Run scripts/build.ps1 before this test script.' }
 $testExe = Join-Path $buildDir 'FvmAssistant.AutomationTests.exe'
-& $compiler /nologo /target:exe /platform:x64 /langversion:latest "/out:$testExe" "/reference:$app" "/reference:$(Join-Path $buildDir 'CefSharp.dll')" /reference:System.Drawing.dll /reference:System.Core.dll /reference:System.Windows.Forms.dll (Join-Path $root 'tests\AutomationTests\RegressionTests.cs')
+& $compiler /nologo /target:exe /platform:x64 /langversion:latest "/out:$testExe" "/reference:$app" "/reference:$(Join-Path $buildDir 'CefSharp.dll')" /reference:System.Drawing.dll /reference:System.Core.dll /reference:System.Windows.Forms.dll (Join-Path $root 'tests\AutomationTests\RegressionTests.cs') (Join-Path $root 'tests\AutomationTests\AgentTests.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Automation regression compilation failed.' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Automation regressions failed.' }

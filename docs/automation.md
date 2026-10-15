@@ -83,6 +83,13 @@ The loopback API offers `/inventory?state=capture`, returning a capture `id` and
 
 ## Local control API
 
+The [Agent interface](agent-api.md) adds a local stdio MCP bridge and versioned
+`/agent/v1/` routes for resource discovery, solo-plan validation, background run
+identity, progress, guarded stopping and private captures. It reuses this
+document's execution and recognition behavior. Existing script routes below
+remain available; task-board and duo coordination are not part of the first MCP
+tool set.
+
 ### Guild publication and mission rewards
 
 The off-screen panel includes **Publish guild-leader tasks** and **Claim selected task reward**.

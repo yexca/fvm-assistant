@@ -201,11 +201,11 @@ namespace FvmAssistant
             return path;
         }
 
-        public async Task StartAsync(GrindRequest request)
+        public async Task<GrindLoop> StartAsync(GrindRequest request)
         {
             if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
                 throw new InvalidOperationException("Another automation action is using this account.");
-            try { await StartCoreAsync(request).ConfigureAwait(false); }
+            try { return await StartCoreAsync(request).ConfigureAwait(false); }
             finally { OperationLock.Release(); }
         }
 
@@ -235,7 +235,7 @@ namespace FvmAssistant
             }
         }
 
-        private async Task StartCoreAsync(GrindRequest request)
+        private async Task<GrindLoop> StartCoreAsync(GrindRequest request)
         {
             if (Running) throw new InvalidOperationException("已经在刷图了");
             if (request.DuoRole.HasValue && !string.IsNullOrWhiteSpace(request.Level))
@@ -335,6 +335,24 @@ namespace FvmAssistant
                     RunningChanged?.Invoke(false);
                 }
             });
+            return loop;
+        }
+
+        /// <summary>A delayed agent stop must never cancel a replacement UI or API run.</summary>
+        public async Task StopAgentRunAsync(GrindLoop expected, bool finishRound)
+        {
+            if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new AgentException("ACCOUNT_BUSY", "Another action is using this account.");
+            try
+            {
+                if (expected == null || !ReferenceEquals(Current, expected))
+                    throw new AgentException("RUN_REPLACED", "The requested run is no longer the account's current run.");
+                if (!Running) return;
+                if (Duo != null) throw new AgentException("COORDINATOR_REQUIRED", "Stop paired runs through their coordinator.");
+                if (finishRound) FinishAfterRound();
+                else await StopAndWaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+            finally { OperationLock.Release(); }
         }
 
         /// <summary>Reads track and support data without accessing a browser or account images.</summary>
