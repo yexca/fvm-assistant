@@ -17,13 +17,37 @@ namespace FvmAssistant
         public static void MoveCef(IBrowserHost host, int x, int y) =>
             host.SendMouseMoveEvent(x, y, false, CefEventFlags.None);
 
-        public static async Task ClickCefAsync(IBrowserHost host, int x, int y)
+        public static async Task ClickCefAsync(IBrowserHost host, int x, int y, MouseButtonType button = MouseButtonType.Left)
         {
             MoveCef(host, x, y);
             await Task.Delay(HoverDelayMs).ConfigureAwait(false);
-            host.SendMouseClickEvent(x, y, MouseButtonType.Left, false, 1, CefEventFlags.LeftMouseButton);
+            var pressed = button == MouseButtonType.Right ? CefEventFlags.RightMouseButton : CefEventFlags.LeftMouseButton;
+            host.SendMouseClickEvent(x, y, button, false, 1, pressed);
             await Task.Delay(PressDelayMs).ConfigureAwait(false);
-            host.SendMouseClickEvent(x, y, MouseButtonType.Left, true, 1, CefEventFlags.None);
+            host.SendMouseClickEvent(x, y, button, true, 1, CefEventFlags.None);
+        }
+
+        public static async Task DragCefAsync(IBrowserHost host, int fromX, int fromY, int toX, int toY)
+        {
+            MoveCef(host, fromX, fromY);
+            await Task.Delay(HoverDelayMs).ConfigureAwait(false);
+            host.SendMouseClickEvent(fromX, fromY, MouseButtonType.Left, false, 1, CefEventFlags.LeftMouseButton);
+            int x = fromX, y = fromY;
+            try
+            {
+                await Task.Delay(PressDelayMs).ConfigureAwait(false);
+                for (int step = 1; step <= 12; step++)
+                {
+                    x = (int)Math.Round(fromX + (toX - fromX) * step / 12.0);
+                    y = (int)Math.Round(fromY + (toY - fromY) * step / 12.0);
+                    host.SendMouseMoveEvent(x, y, false, CefEventFlags.LeftMouseButton);
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                host.SendMouseClickEvent(x, y, MouseButtonType.Left, true, 1, CefEventFlags.None);
+            }
         }
 
         /// <summary>Replace a focused HTML text field using browser key events, without system focus.</summary>

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>FvmAssistant pointer test</title>
+<style>
+  body { margin: 0; color: #eef3ff; background: #152136; font: 22px sans-serif; }
+  .box { position: absolute; top: 80px; width: 180px; height: 120px;
+    display: grid; place-items: center; border: 3px solid #edf3ff; }
+  #source { left: 100px; background: #2874ad; }
+  #target { left: 500px; background: #344760; }
+  #status { position: absolute; top: 240px; left: 100px; white-space: pre-line; }
+</style>
+<div id="source" class="box">Drag from here</div>
+<div id="target" class="box">Release here</div>
+<div id="status">Ready: no pointer input</div>
+<script>
+  var held = false, downs = 0, moves = 0, ups = 0, rightUps = 0, delivered = false;
+  var source = document.getElementById('source');
+  var target = document.getElementById('target');
+  function render() {
+    document.getElementById('status').textContent =
+      'Left down: ' + downs + '\nHeld moves: ' + moves + '\nLeft up: ' + ups +
+      '\nRight up: ' + rightUps + '\nHeld: ' + held + '\nDelivered: ' + delivered;
+    target.style.background = delivered ? '#187749' : '#344760';
+  }
+  source.addEventListener('mousedown', function (event) {
+    if (event.button === 0) { held = true; downs++; render(); }
+  });
+  document.addEventListener('mousemove', function (event) {
+    if (held && (event.buttons & 1)) { moves++; render(); }
+  });
+  document.addEventListener('mouseup', function (event) {
+    if (event.button === 2) { rightUps++; held = false; render(); return; }
+    if (event.button !== 0 || !held) return;
+    var box = target.getBoundingClientRect();
+    delivered = event.clientX >= box.left && event.clientX < box.right &&
+      event.clientY >= box.top && event.clientY < box.bottom;
+    held = false; ups++; render();
+  });
+  document.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+</script>
+</html>

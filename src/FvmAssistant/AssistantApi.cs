@@ -51,6 +51,7 @@ namespace FvmAssistant
                 case "/sample": return SampleAsync(r);
                 case "/click": return PointerAsync(r, click: true);
                 case "/move": return PointerAsync(r, click: false);
+                case "/drag": return DragAsync(r);
                 case "/window": return WindowAsync(r);
                 case "/navigate": return Task.FromResult(Navigate(r));
                 case "/reload": return Task.FromResult(Reload());
@@ -82,7 +83,8 @@ namespace FvmAssistant
                 "/capture?method=M&crop=C&label=L   M: osr|devtools|printwindow|printwindow-child|screen; C: flash|full|x,y,w,h",
                 "/sample?method=M&crop=C&count=4&interval=500   repeated captures; shows whether frames keep changing",
                 "/move?x=&y=&space=flash|page&method=cef|post",
-                "/click?x=&y=&space=flash|page&method=cef|post",
+                "/click?x=&y=&space=flash|page&method=cef|post[&button=left|right]   right requires cef",
+                "/drag?fromX=&fromY=&toX=&toY=&space=flash|page   attended CEF left-button drag",
                 "/window?state=normal|minimize|offscreen|onscreen|bottom|top",
                 "/navigate?url=https://…",
                 "/reload",
@@ -90,7 +92,8 @@ namespace FvmAssistant
                 "/record[?state=start|stop&interval=3000]   record manual mouse input + frames (osr only)",
                 "/detect[?slots=5]             which game screen is showing, template scores, card slot brightness",
                 "/grind?state=start&rounds=1&track=通用轨道/6美味/1曲奇.txt&map=小火炉:1,海星:5&slots=5[&level=美味/曲奇][&shovel=1]",
-                "/grind?state=stop | /grind    stop / progress",
+                "/grind?state=finish-round   finish the current solo round, collect rewards, then return to town",
+                "/grind?state=stop | /grind    immediate stop / progress",
                 "/duo?state=start&role=host|guest&rounds=N&track=...&cards=...   start in an already paired room",
                 "/duo?state=start&role=host|guest&level=...&password=1234&room=N   pair automatically (room is guest-only)",
                 "/duo?state=plan&track=...&cards=...&level=...   inspect one account's conservative duo formation",
@@ -104,7 +107,10 @@ namespace FvmAssistant
                 "/record-track[?rec=<recording-id>][&save=曲奇-录制[&overwrite=1]]   read a recording back as a track (default: newest)",
                 "/portal?state=select&server=<server-number>   choose a server through the visible 4399 portal controls",
                 "/guild-tasks?state=publish   publish guild-leader tasks once, using visible controls",
+                "/guild-tasks?state=open   open the guild task board and return fresh evidence",
+                "/missions?state=open   open the account task board and return fresh evidence",
                 "/missions?state=inspect   current board state and guarded, private capture",
+                "/missions?state=select&row=Y&listHash=...   select an observed task row and return fresh evidence (may auto-accept)",
                 "/missions?state=claim&selectedHash=...   claim a verified completed reward",
                 "/missions?state=accept&row=Y&listHash=...   click a visible task and verify 任务进行中",
             },
@@ -113,7 +119,9 @@ namespace FvmAssistant
         // ---------- state ----------
         private Task<object> MissionsAsync(HttpRequest r) => Guard<object>(async () =>
         {
-            return await _grind.MissionActionAsync(r.Q("state", "inspect"), r.QInt("row", 0),
+            var action = r.Q("state", "inspect");
+            if (r.Path == "/guild-tasks" && action == "open") action = "open-guild";
+            return await _grind.MissionActionAsync(action, r.QInt("row", 0),
                 r.Q("listHash"), r.Q("selectedHash")).ConfigureAwait(false);
         });
 
@@ -330,6 +338,10 @@ namespace FvmAssistant
             double x = r.QDouble("x"), y = r.QDouble("y");
             var space = r.Q("space", "flash");
             var method = r.Q("method", "cef");
+            var buttonName = r.Q("button", "left");
+            if (buttonName != "left" && buttonName != "right") throw new HttpError(400, "button must be left|right");
+            if (buttonName == "right" && (!click || method != "cef")) throw new HttpError(400, "right button requires a cef click");
+            var button = buttonName == "right" ? MouseButtonType.Right : MouseButtonType.Left;
 
             if (space == "flash")
             {
@@ -347,7 +359,7 @@ namespace FvmAssistant
             {
                 case "cef":
                     var host = RequireBrowser().GetHost();
-                    if (click) await Input.ClickCefAsync(host, px, py).ConfigureAwait(false);
+                    if (click) await Input.ClickCefAsync(host, px, py, button).ConfigureAwait(false);
                     else Input.MoveCef(host, px, py);
                     break;
                 case "post":
@@ -365,6 +377,32 @@ namespace FvmAssistant
             Log.Info($"{action} {method} page=({px},{py})");
             _form.SetStatus($"{action} {method} ({px},{py})");
             return new { action, method, space, page = new { x = px, y = py }, window = WindowInfo() };
+        }
+
+        private async Task<object> DragAsync(HttpRequest r)
+        {
+            if (_grind.Running || !await _grind.OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new HttpError(409, "Manual pointer input is disabled while automation owns this account.");
+            try
+            {
+                var space = r.Q("space", "flash");
+                var offset = Point.Empty;
+                if (space == "flash") offset = (await RequireFlashAsync().ConfigureAwait(false)).StageRect.Location;
+                else if (space != "page") throw new HttpError(400, "space must be flash|page");
+                int Coordinate(string key, int origin)
+                {
+                    double value = r.QDouble(key);
+                    if (double.IsNaN(value) || double.IsInfinity(value) || Math.Abs(value) > 10000)
+                        throw new HttpError(400, "Drag coordinates must be finite and within 10000 pixels.");
+                    return (int)Math.Round(value) + origin;
+                }
+                var from = new Point(Coordinate("fromX", offset.X), Coordinate("fromY", offset.Y));
+                var to = new Point(Coordinate("toX", offset.X), Coordinate("toY", offset.Y));
+                await Input.DragCefAsync(RequireBrowser().GetHost(), from.X, from.Y, to.X, to.Y).ConfigureAwait(false);
+                Log.Info($"drag cef page=({from.X},{from.Y})->({to.X},{to.Y})");
+                return new { action = "drag", method = "cef", space, from = new { x = from.X, y = from.Y }, to = new { x = to.X, y = to.Y } };
+            }
+            finally { _grind.OperationLock.Release(); }
         }
 
         // ---------- window / navigation ----------
@@ -393,6 +431,7 @@ namespace FvmAssistant
                     action = () =>
                     {
                         if (_form.WindowState == FormWindowState.Minimized) _form.WindowState = FormWindowState.Normal;
+                        _form.Show();
                         _form.Activate();
                     };
                     break;
@@ -559,13 +598,16 @@ namespace FvmAssistant
                 case "stop":
                     await _grind.StopAndWaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                     return GrindJson();
+                case "finish-round":
+                    _grind.FinishAfterRound();
+                    return GrindJson();
                 case "start":
                     var request = ParseGrindRequest(r);
                     await _grind.StartAsync(request).ConfigureAwait(false);
                     await Task.Delay(300).ConfigureAwait(false);
                     return GrindJson();
                 default:
-                    throw new HttpError(400, "state must be start|stop");
+                    throw new HttpError(400, "state must be start|finish-round|stop");
             }
         });
 
@@ -657,6 +699,8 @@ namespace FvmAssistant
                 running = _grind.Running,
                 state = g.State,
                 roundsDone = g.RoundsDone,
+                bossRoundsDone = g.BossRoundsDone,
+                finishAfterRoundRequested = g.FinishAfterRoundRequested,
                 screen = g.LastScreen.ToString(),
                 runDirectory = g.RunDirectory,
                 messages = messages.Skip(Math.Max(0, messages.Count - 40)).ToList(),
@@ -830,6 +874,7 @@ namespace FvmAssistant
             return (object)new
             {
                 state = _form.WindowState.ToString(),
+                visible = _form.Visible,
                 iconic = Native.IsIconic(handle),
                 foreground = Native.GetForegroundWindow() == handle,
                 bounds = RectJson(_form.Bounds),

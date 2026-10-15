@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -15,6 +16,7 @@ namespace FvmAssistant.Automation
         public string ListHash { get; set; }
         public string SelectedHash { get; set; }
         public bool VisibleRewardsPending { get; set; }
+        public List<int> CompletedRewardRows { get; set; }
         public bool CanClaim { get; set; }
         public bool CanPublish { get; set; }
         public string Capture { get; set; }
@@ -45,6 +47,33 @@ namespace FvmAssistant.Automation
         internal static bool Red(int red, int green, int blue) => red > 180 && green < 130 && blue < 140;
         internal static bool Cyan(int red, int green, int blue) => red < 150 && green > 150 && blue > 190;
         internal static bool Orange(int red, int green, int blue) => red > 190 && green > 85 && green < 195 && blue < 90;
+        internal static bool GuildPublishEnabled(StageFrame frame) => Count(frame, new Rectangle(88, 44, 74, 20),
+            (red, green, blue) => red > 190 && green > 85 && green < 235 && blue < 130 && red - blue > 80) > 180;
+        private static bool RewardGreen(int red, int green, int blue) => green > 145 && red < 180 && blue < 110;
+        internal static bool RowRewardPending(StageFrame frame, int rowY) => rowY >= 140 && rowY <= 526 &&
+            Count(frame, new Rectangle(357, rowY - 7, 42, 16), RewardGreen) > 45;
+
+        internal static List<int> CompletedRewardRows(StageFrame frame)
+        {
+            var rows = new List<int>();
+            int first = -1, last = -1;
+            for (int y = 140; y < 530; y++)
+            {
+                bool ink = Count(frame, new Rectangle(357, y, 42, 1), RewardGreen) > 2;
+                if (ink)
+                {
+                    if (first < 0) first = y;
+                    last = y;
+                }
+                if (first >= 0 && ((!ink && y - last >= 2) || y == 529))
+                {
+                    int center = (first + last) / 2;
+                    if (RowRewardPending(frame, center)) rows.Add(center);
+                    first = last = -1;
+                }
+            }
+            return rows;
+        }
 
         internal static MissionState State(StageFrame frame)
         {
@@ -58,8 +87,7 @@ namespace FvmAssistant.Automation
             Count(frame, new Rectangle(355, rowY - 7, 45, 16), Cyan) > 45;
         internal static bool GuildMenuOpen(StageFrame frame) => Count(frame, new Rectangle(646, 266, 205, 86),
             (red, green, blue) => green > 130 && blue < 130 && red < 240) > 1000;
-        internal static bool Pending(StageFrame frame) => Count(frame, new Rectangle(357, 140, 42, 390),
-            (red, green, blue) => green > 145 && red < 180 && blue < 110) > 45;
+        internal static bool Pending(StageFrame frame) => Count(frame, new Rectangle(357, 140, 42, 390), RewardGreen) > 45;
 
         internal static string Hash(StageFrame frame, Rectangle region)
         {
@@ -120,18 +148,25 @@ namespace FvmAssistant.Automation
         {
             var frame = _io.Grab();
             var view = View(frame);
-            string capture = Path.Combine(_captures, "missions-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".png");
-            using (var bitmap = frame.ToBitmap()) bitmap.Save(capture, ImageFormat.Png);
+            string capture = SaveCapture(frame, "missions");
             return new MissionObservation
             {
                 View = view, SelectedState = Board(view) ? MissionEvidence.State(frame).ToString() : "Unknown",
                 ListHash = Board(view) ? MissionEvidence.ListHash(frame) : null,
                 SelectedHash = Board(view) ? MissionEvidence.Hash(frame, MissionEvidence.Selected) : null,
                 VisibleRewardsPending = Board(view) && MissionEvidence.Pending(frame),
+                CompletedRewardRows = Board(view) ? MissionEvidence.CompletedRewardRows(frame) : new List<int>(),
                 CanClaim = Board(view) && MissionEvidence.CanClaim(frame),
-                CanPublish = view == "GuildTasks" && MissionEvidence.Count(frame, new Rectangle(88, 44, 74, 20), MissionEvidence.Orange) > 100,
+                CanPublish = view == "GuildTasks" && MissionEvidence.GuildPublishEnabled(frame),
                 Capture = capture, Result = result
             };
+        }
+
+        private string SaveCapture(StageFrame frame, string label)
+        {
+            string path = Path.Combine(_captures, label + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".png");
+            using (var bitmap = frame.ToBitmap()) bitmap.Save(path, ImageFormat.Png);
+            return path;
         }
 
         private async Task ClickAsync(Point point, int delay = 500, bool park = true)
@@ -155,27 +190,36 @@ namespace FvmAssistant.Automation
         internal async Task<MissionObservation> ExecuteAsync(string action, int rowY, string listHash, string selectedHash)
         {
             if (action == "inspect") return Observe();
+            if (action == "open") return await OpenAccountAsync().ConfigureAwait(false);
+            if (action == "open-guild") return await OpenGuildAsync().ConfigureAwait(false);
             if (action == "publish") return await PublishAsync().ConfigureAwait(false);
             var frame = _io.Grab();
             var view = View(frame);
             if (!Board(view)) throw new InvalidOperationException("Open the account or guild mission board first.");
-            if (action == "accept")
+            if (action == "accept" || action == "select")
             {
                 if (rowY < 140 || rowY > 526) throw new ArgumentOutOfRangeException(nameof(rowY));
                 MissionEvidence.RequireGuard(listHash, MissionEvidence.ListHash(frame));
-                if (MissionEvidence.Pending(frame)) throw new InvalidOperationException("Claim the visible completed rewards before accepting another task.");
+                if (MissionEvidence.Pending(frame) && (action == "accept" || !MissionEvidence.RowRewardPending(frame, rowY)))
+                    throw new InvalidOperationException("Select and claim the visible completed rewards before selecting another task.");
                 await ClickAsync(new Point(225, rowY)).ConfigureAwait(false);
                 await RequireViewAsync(view).ConfigureAwait(false);
                 var accepted = Observe();
+                if (action == "select")
+                {
+                    accepted.Result = "task row selected; the game may accept it automatically; inspect its state before battle or reward collection";
+                    return accepted;
+                }
                 if (accepted.SelectedState != MissionState.InProgress.ToString() || !MissionEvidence.RowInProgress(_io.Grab(), rowY))
                     throw new InvalidOperationException("The selected task was not confirmed as 任务进行中. Do not start its battle.");
                 accepted.Result = "accepted and verified in progress";
                 return accepted;
             }
-            if (action != "claim") throw new ArgumentException("Mission state must be inspect, accept, claim or publish.");
+            if (action != "claim") throw new ArgumentException("Mission state must be open, open-guild, inspect, select, accept, claim or publish.");
             MissionEvidence.RequireGuard(selectedHash, MissionEvidence.Hash(frame, MissionEvidence.Selected));
             if (!MissionEvidence.CanClaim(frame)) throw new InvalidOperationException("The selected task has no verified, unclaimed reward.");
             await ClickAsync(new Point(641, 531)).ConfigureAwait(false);
+            var attemptFrame = _io.Grab();
             for (int attempt = 0; attempt < 15; attempt++)
             {
                 var after = _io.Grab();
@@ -184,13 +228,44 @@ namespace FvmAssistant.Automation
                     return Observe("reward claimed; inspect and click any newly unlocked task before its battle");
                 await Task.Delay(300).ConfigureAwait(false);
             }
-            Observe("reward outcome uncertain");
-            throw new InvalidOperationException("Reward collection was not confirmed. Inspect before retrying; no task was accepted.");
+            string attemptCapture = SaveCapture(attemptFrame, "missions-attempt");
+            var final = Observe("reward outcome uncertain");
+            throw new InvalidOperationException("Reward collection was not confirmed. Inspect before retrying; no task was accepted. " +
+                "Private attempt capture: " + attemptCapture + "; current capture: " + final.Capture);
         }
 
-        private async Task<MissionObservation> PublishAsync()
+        private async Task<MissionObservation> OpenAccountAsync()
         {
             var view = View(_io.Grab());
+            if (view == "AccountTasks") return Observe("account task board already open");
+            if (view == "GuildTasks")
+            {
+                await ClickAsync(new Point(853, 56)).ConfigureAwait(false);
+                await RequireViewAsync("Guild").ConfigureAwait(false);
+                view = "Guild";
+            }
+            if (view == "Guild")
+            {
+                await ClickAsync(new Point(904, 57)).ConfigureAwait(false);
+                await RequireViewAsync("Lobby").ConfigureAwait(false);
+                view = "Lobby";
+            }
+            if (view != "Lobby") throw new InvalidOperationException("Return to a lobby map or close the current popup before opening account tasks.");
+            await ClickAsync(new Point(641, 559)).ConfigureAwait(false);
+            await RequireViewAsync("AccountTasks").ConfigureAwait(false);
+            return Observe("account task board opened; inspect rewards and requirements before selecting a task");
+        }
+
+        private async Task<MissionObservation> OpenGuildAsync()
+        {
+            var view = View(_io.Grab());
+            if (view == "GuildTasks") return Observe("guild task board already open");
+            if (view == "AccountTasks")
+            {
+                await ClickAsync(new Point(853, 53)).ConfigureAwait(false);
+                await RequireViewAsync("Lobby").ConfigureAwait(false);
+                view = "Lobby";
+            }
             if (view == "Lobby")
             {
                 await ClickAsync(new Point(778, 555)).ConfigureAwait(false);
@@ -206,6 +281,18 @@ namespace FvmAssistant.Automation
                     throw new InvalidOperationException("The guild activities menu was not confirmed.");
                 await ClickAsync(new Point(696, 310)).ConfigureAwait(false);
                 await RequireViewAsync("GuildTasks").ConfigureAwait(false);
+                view = "GuildTasks";
+            }
+            if (view != "GuildTasks") throw new InvalidOperationException("Return to a lobby map or close the current popup before opening guild tasks.");
+            return Observe("guild task board opened; inspect rewards and requirements before selecting a task");
+        }
+
+        private async Task<MissionObservation> PublishAsync()
+        {
+            var view = View(_io.Grab());
+            if (view != "GuildPublish")
+            {
+                await OpenGuildAsync().ConfigureAwait(false);
                 view = "GuildTasks";
             }
             if (view == "GuildTasks")

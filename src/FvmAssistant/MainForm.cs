@@ -147,9 +147,13 @@ namespace FvmAssistant
 
         public void MoveOnscreen()
         {
-            if (_onscreenLocation == null) return;
-            Location = _onscreenLocation.Value;
-            _onscreenLocation = null;
+            if (_onscreenLocation != null)
+            {
+                Location = _onscreenLocation.Value;
+                _onscreenLocation = null;
+            }
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Show();
         }
 
         private void UpdateTitle()

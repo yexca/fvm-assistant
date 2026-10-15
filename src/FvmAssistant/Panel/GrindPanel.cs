@@ -39,6 +39,7 @@ namespace FvmAssistant.Panel
         private readonly CheckBox _autoFlame;
         private readonly Button _start;
         private readonly Button _stop;
+        private readonly Button _finishRound;
         private readonly Button _learn;
         private readonly Label _state;
         private readonly Button _record;
@@ -156,17 +157,39 @@ namespace FvmAssistant.Panel
             _autoFlame = new CheckBox { Text = "账号有自动拾取火苗（只重点扫最后两列）", AutoSize = true, Checked = _settings.AutoFlame };
             Add(_autoFlame);
 
-            var buttons = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 10, 0, 0), WrapContents = false };
+            var buttons = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 10, 0, 0), WrapContents = true };
             _start = new Button { Text = "▶ 开始刷图", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
             _start.Click += async (s, e) => await StartAsync();
             _stop = new Button { Text = "■ 停止", AutoSize = true, Enabled = false };
             _stop.Click += (s, e) => _grind.Stop();
+            _finishRound = new Button { Text = "Finish current round", AutoSize = true, Enabled = false };
+            _finishRound.Click += (s, e) =>
+            {
+                try { _grind.FinishAfterRound(); UpdateState(); }
+                catch (Exception error) { MessageBox.Show(this, error.Message, "Finish current round"); }
+            };
             buttons.Controls.Add(_start);
             buttons.Controls.Add(_stop);
+            buttons.Controls.Add(_finishRound);
             Add(buttons);
 
             Add(Heading("Missions"));
             var missionButtons = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty, WrapContents = true };
+            foreach (var board in new[] { (label: "Open account task board", action: "open"), (label: "Open guild task board", action: "open-guild") })
+            {
+                var openBoard = new Button { Text = board.label, AutoSize = true };
+                openBoard.Click += async (s, e) =>
+                {
+                    try
+                    {
+                        var result = await _grind.MissionActionAsync(board.action);
+                        AppendLog(result.Result ?? result.View);
+                    }
+                    catch (Exception error) { MessageBox.Show(this, error.Message, "Mission board"); }
+                };
+                missionButtons.Controls.Add(openBoard);
+                _inputs.Add(openBoard);
+            }
             var publishTasks = new Button { Text = "Publish guild-leader tasks", AutoSize = true };
             publishTasks.Click += async (s, e) =>
             {
@@ -649,6 +672,7 @@ namespace FvmAssistant.Panel
         private void UpdateState()
         {
             var loop = _grind.Current;
+            _finishRound.Enabled = _grind.Running && _grind.Duo == null && loop != null && !loop.FinishAfterRoundRequested;
             if (loop == null)
             {
                 _state.Text = "未开始。刷图期间游戏画面不响应鼠标键盘，可以最小化窗口。";
@@ -659,12 +683,13 @@ namespace FvmAssistant.Panel
             switch (loop.State)
             {
                 case "finished": ended = "全部完成"; break;
+                case "finished-early": ended = "Finished after the current round"; break;
                 case "stopped": ended = "已停止"; break;
                 case "failed": ended = "出错停止，见日志和记录文件夹里的截图"; break;
                 default: ended = loop.State; break;
             }
             _state.Text = _grind.Running
-                ? $"刷图中：已完成 {target} 局 · {Describe(loop.LastScreen)}"
+                ? $"刷图中：已完成 {target} 局 · {Describe(loop.LastScreen)}" + (loop.FinishAfterRoundRequested ? " · finishing this round" : "")
                 : $"{ended}：完成 {loop.RoundsDone} 局";
         }
 

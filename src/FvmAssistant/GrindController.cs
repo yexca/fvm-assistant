@@ -215,8 +215,8 @@ namespace FvmAssistant
             try
             {
                 if (Running) throw new InvalidOperationException("Finish or stop the battle before handling missions.");
-                if (action != "inspect" && action != "publish" && action != "accept" && action != "claim")
-                    throw new ArgumentException("Mission state must be inspect, accept, claim or publish.");
+                if (action != "open" && action != "open-guild" && action != "inspect" && action != "select" && action != "publish" && action != "accept" && action != "claim")
+                    throw new ArgumentException("Mission state must be open, open-guild, inspect, select, accept, claim or publish.");
                 var io = await CreateGameIoAsync().ConfigureAwait(false);
                 var templates = new TemplateLibrary();
                 templates.LoadDirectory(Path.Combine(TrackDir, "附加程序", "图片", "界面"));
@@ -344,6 +344,12 @@ namespace FvmAssistant
 
         public void Stop() => _cts?.Cancel();
 
+        public void FinishAfterRound()
+        {
+            if (!Running || Current == null) throw new InvalidOperationException("No grind is active.");
+            Current.FinishAfterRound();
+        }
+
         public void ReleaseDuo(string phase, string runId, int round)
         {
             if (!Running || Duo == null || Current == null)
@@ -363,10 +369,24 @@ namespace FvmAssistant
         /// <summary>The room screen and which deck slots hold a card; throws when not in a room.</summary>
         public async Task<(StageFrame frame, List<int> filled)> ReadDeckAsync()
         {
-            var io = await CreateGameIoAsync().ConfigureAwait(false);
-            var frame = io.Grab();
-            if (Detector().Detect(frame) != GameScreen.Room) throw new InvalidOperationException("请先进入关卡房间（能看到“战斗卡片包”的界面）");
-            return (frame, DeckBuilder.FilledSlots(frame));
+            if (!await OperationLock.WaitAsync(0).ConfigureAwait(false))
+                throw new InvalidOperationException("Another automation action is using this account.");
+            try
+            {
+                if (Running) throw new InvalidOperationException("Stop the active run before learning room cards.");
+                var io = await CreateGameIoAsync().ConfigureAwait(false);
+                var detector = Detector();
+                if (detector.Detect(io.Grab()) != GameScreen.Room)
+                    throw new InvalidOperationException("请先进入关卡房间（能看到“战斗卡片包”的界面）");
+
+                // Hover shading and tooltips must not become part of a learned icon.
+                io.Move(new Point(940, 300));
+                await Task.Delay(600).ConfigureAwait(false);
+                var frame = io.Grab();
+                if (detector.Detect(frame) != GameScreen.Room) throw new RoomCoveredException();
+                return (frame, DeckBuilder.FilledSlots(frame));
+            }
+            finally { OperationLock.Release(); }
         }
 
         public void LearnCard(string name, StageFrame roomFrame, int slot)

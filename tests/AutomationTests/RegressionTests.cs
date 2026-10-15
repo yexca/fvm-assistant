@@ -40,6 +40,11 @@ namespace FvmAssistant.Tests
                 Test("mission state distinguishes active, complete, claimed and unknown", MissionStates);
                 Test("mission list identity survives header animation but rejects moved labels", MissionListAnimation);
                 Test("mission actions require fresh evidence and verify claim and acceptance", MissionGuards);
+                Test("failed claims retain transient feedback and current evidence without another click", MissionClaimFeedback);
+                Test("mission row selection reaches pending rewards without bypassing fresh evidence", MissionSelection);
+                Test("completed reward rows follow badge positions and reject unrelated colors and noise", MissionRewardRows);
+                Test("task board navigation validates each transition and never selects, draws or claims", MissionNavigation);
+                Test("guild publication recognizes the gold button while rejecting gray and unrelated colors", GuildButtonColors);
                 Test("transition polling updates the reported screen before resuming a boss", TransitionScreenStatus);
                 Test("recognized victory and notices outrank the guest-choice pixel heuristic", GuestChoicePrecedence);
                 Test("finish after round preserves boss continuation and free rewards without starting another battle", FinishRoundRewards);
@@ -1164,6 +1169,201 @@ namespace FvmAssistant.Tests
             Check(rejected && io.Clicks == 3, "Disconnects must not accept the task visible underneath");
         }
 
+        private static void MissionClaimFeedback()
+        {
+            var library = new TemplateLibrary();
+            library.LoadDirectory(Path.Combine(_scratch, "mission-templates"));
+            var pending = MissionFrame(Color.Red, true, false);
+            var feedback = Frame(Color.White, bitmap =>
+            {
+                using (var source = pending.ToBitmap())
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.DrawImageUnscaled(source, 0, 0);
+                    graphics.FillRectangle(Brushes.Lime, 310, 290, 325, 28);
+                }
+            });
+            var io = new MissionIo { Current = pending };
+            int postClickGrabs = 0;
+            io.FrameSource = () => io.Clicks > 0 && ++postClickGrabs == 1 ? feedback : pending;
+            var actions = new MissionActions(io, Detector(), library, _scratch);
+            string message = null;
+            try { actions.ExecuteAsync("claim", 0, null, MissionEvidence.Hash(pending, MissionEvidence.Selected)).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException error) { message = error.Message; }
+            var captures = Directory.GetFiles(_scratch, "missions-attempt-*.png");
+            Check(message != null && io.Clicks == 1 && captures.Length == 1 && message.Contains(captures[0]),
+                "An unconfirmed claim must fail once and identify its private feedback capture");
+            using (var bitmap = new Bitmap(captures[0]))
+                Check(bitmap.GetPixel(315, 295).ToArgb() == Color.Lime.ToArgb(),
+                    "The failed attempt capture must retain the transient notice after later frames remove it");
+            Check(MissionEvidence.CanClaim(io.Grab()), "Saving diagnostics must not mark the unclaimed reward as collected");
+        }
+
+        private static void MissionRewardRows()
+        {
+            StageFrame Badges(int shift) => Frame(Color.Black, bitmap =>
+            {
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.FillRectangle(Brushes.Lime, 360, 166 + shift, 28, 15);
+                    graphics.FillRectangle(Brushes.Lime, 360, 388 + shift, 28, 15);
+                    graphics.FillRectangle(Brushes.Cyan, 360, 250 + shift, 28, 15);
+                    graphics.FillRectangle(Brushes.Magenta, 360, 280 + shift, 28, 15);
+                    graphics.FillRectangle(Brushes.Lime, 360, 320 + shift, 3, 3);
+                }
+            });
+            Check(MissionEvidence.CompletedRewardRows(Badges(0)).SequenceEqual(new[] { 173, 395 }),
+                "Only complete badges should produce ordered row centers");
+            Check(MissionEvidence.CompletedRewardRows(Badges(29)).SequenceEqual(new[] { 202, 424 }),
+                "Scrolling must change the suggested row coordinates");
+            Check(MissionEvidence.CompletedRewardRows(Frame(Color.Black)).Count == 0,
+                "A frame without completed badges must return no candidate rows");
+        }
+
+        private static void MissionSelection()
+        {
+            var library = new TemplateLibrary();
+            library.LoadDirectory(Path.Combine(_scratch, "mission-templates"));
+            var io = new MissionIo { Current = MissionFrame(Color.Red, true, false, true) };
+            var actions = new MissionActions(io, Detector(), library, _scratch);
+            var before = actions.ExecuteAsync("inspect", 0, null, null).GetAwaiter().GetResult();
+            bool rejected = false;
+            try { actions.ExecuteAsync("select", 177, "stale", null).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && io.Clicks == 0, "Selection must reject stale list evidence");
+            rejected = false;
+            try { actions.ExecuteAsync("select", 220, before.ListHash, null).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && io.Clicks == 0, "Pending rewards prevent selecting an unrelated row");
+            var selected = actions.ExecuteAsync("select", 177, before.ListHash, null).GetAwaiter().GetResult();
+            Check(io.Clicks == 1 && selected.CanClaim && selected.SelectedState == "Complete",
+                "Selecting a completed row returns fresh claim evidence without collecting its reward");
+            rejected = false;
+            try { actions.ExecuteAsync("accept", 177, selected.ListHash, null).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && io.Clicks == 1, "Selection must not relax the acceptance guard");
+            io.Current = MissionFrame(Color.Cyan, false, false, disconnected: true);
+            rejected = false;
+            try { actions.ExecuteAsync("select", 177, selected.ListHash, null).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && io.Clicks == 1, "A disconnect hides the task board during selection");
+        }
+
+        private static void MissionNavigation()
+        {
+            var directory = Path.Combine(_scratch, "mission-navigation-templates");
+            Directory.CreateDirectory(directory);
+            var rules = (IEnumerable)typeof(ScreenDetector).GetField("Rules", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            var names = new HashSet<string>(new[] { "房间_2P等待中", "房间_2P已关闭", "任务看板", "公会", "公会任务", "发布任务" });
+            foreach (var rule in rules)
+                foreach (var name in (string[])rule.GetType().GetField("Item2").GetValue(rule)) names.Add(name);
+            var markers = new Dictionary<string, Point>();
+            foreach (var name in names)
+            {
+                var point = new Point(100 + markers.Count * 25, 2);
+                markers.Add(name, point);
+                using (var bitmap = new Bitmap(1, 1))
+                {
+                    bitmap.SetPixel(0, 0, Color.White);
+                    bitmap.Save(Path.Combine(directory, "(" + point.X + "," + point.Y + ")" + name + ".png"));
+                }
+            }
+            StageFrame Mark(params string[] shown) => Frame(Color.Black, bitmap =>
+            {
+                foreach (var name in shown) bitmap.SetPixel(markers[name].X, markers[name].Y, Color.White);
+            });
+            var library = new TemplateLibrary();
+            library.LoadDirectory(directory);
+            var menu = Mark("公会");
+            using (var bitmap = menu.ToBitmap())
+            {
+                using (var graphics = Graphics.FromImage(bitmap)) graphics.FillRectangle(Brushes.GreenYellow, 646, 266, 205, 86);
+                menu = StageFrame.FromBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+            }
+            var io = new MissionNavigationIo { Lobby = Mark("排行", "跳转按钮"), Account = Mark("任务看板"),
+                Guild = Mark("公会"), GuildTasks = Mark("公会任务"), Menu = menu };
+            io.Current = io.Lobby;
+            var actions = new MissionActions(io, new ScreenDetector(library), library, _scratch);
+            var opened = actions.ExecuteAsync("open", 0, null, null).GetAwaiter().GetResult();
+            Check(opened.View == "AccountTasks" && io.Clicks.Count == 1, "Opening account tasks must reach the verified board");
+            actions.ExecuteAsync("open", 0, null, null).GetAwaiter().GetResult();
+            Check(io.Clicks.Count == 1, "An already open account board sends no input");
+            opened = actions.ExecuteAsync("open-guild", 0, null, null).GetAwaiter().GetResult();
+            Check(opened.View == "GuildTasks" && io.Clicks.Count == 5 && io.MenuClosedByMove == 0,
+                "Switching boards must verify the hall and retain its transient menu");
+            actions.ExecuteAsync("open-guild", 0, null, null).GetAwaiter().GetResult();
+            Check(io.Clicks.Count == 5, "An already open guild board sends no input");
+            opened = actions.ExecuteAsync("open", 0, null, null).GetAwaiter().GetResult();
+            Check(opened.View == "AccountTasks" && io.Clicks.Count == 8, "Account navigation must return through the hall and lobby");
+            Check(!io.Clicks.Contains(new Point(125, 57)) && !io.Clicks.Contains(new Point(484, 440)) &&
+                !io.Clicks.Contains(new Point(641, 531)) && io.Clicks.All(point => point.X > 402 || point.Y < 140 || point.Y > 526),
+                "Opening boards must never publish, draw, select a task or claim rewards");
+            foreach (var blocked in new[] { Mark("任务看板", "断开连接"), Mark("任务看板", "健康提示"),
+                Mark("任务看板", "活动弹窗_关闭"), Mark("选卡界面"), Frame(Color.Black) })
+                foreach (var action in new[] { "open", "open-guild" })
+                {
+                    io.Current = blocked;
+                    bool rejected = false;
+                    try { actions.ExecuteAsync(action, 0, null, null).GetAwaiter().GetResult(); }
+                    catch (InvalidOperationException) { rejected = true; }
+                    Check(rejected && io.Clicks.Count == 8, "A popup or unknown screen must stop before any navigation click");
+                }
+            io.Current = io.GuildTasks;
+            io.HoldTransitions = true;
+            bool stalled = false;
+            try { actions.ExecuteAsync("open", 0, null, null).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { stalled = true; }
+            Check(stalled && io.Clicks.Count == 9, "A failed board close must stop before the next navigation click");
+        }
+
+        private sealed class MissionNavigationIo : IGameIo
+        {
+            internal StageFrame Current, Lobby, Account, Guild, GuildTasks, Menu;
+            internal readonly List<Point> Clicks = new List<Point>();
+            internal bool HoldTransitions;
+            internal int MenuClosedByMove;
+            public StageFrame Grab() => Current;
+            public Task ClickAsync(Point point, MouseButtonType button = MouseButtonType.Left)
+            {
+                Clicks.Add(point);
+                if (HoldTransitions) return Task.CompletedTask;
+                if (Current == GuildTasks && point == new Point(853, 56)) Current = Guild;
+                else if (Current == Account && point == new Point(853, 53) || Current == Guild && point == new Point(904, 57)) Current = Lobby;
+                else if (Current == Lobby && point == new Point(641, 559)) Current = Account;
+                else if (Current == Lobby && point == new Point(778, 555)) Current = Guild;
+                else if (Current == Guild && point == new Point(748, 419)) Current = Menu;
+                else if (Current == Menu && point == new Point(696, 310)) Current = GuildTasks;
+                return Task.CompletedTask;
+            }
+            public void Move(Point point) { if (Current == Menu) { MenuClosedByMove++; Current = Guild; } }
+            public Task TypeAsync(string text) => Task.CompletedTask;
+            public void Reload() { }
+            public DateTime LastPageLoadUtc => DateTime.MinValue;
+            public void Repaint() { }
+        }
+
+        private static void GuildButtonColors()
+        {
+            var gold = Frame(Color.Black, bitmap =>
+            {
+                using (var graphics = Graphics.FromImage(bitmap))
+                using (var brush = new SolidBrush(Color.FromArgb(235, 210, 100)))
+                {
+                    graphics.FillRectangle(brush, 88, 44, 74, 20);
+                    graphics.FillRectangle(Brushes.DarkOrange, 88, 44, 10, 10);
+                }
+            });
+            Check(MissionEvidence.Count(gold, new Rectangle(88, 44, 74, 20), MissionEvidence.Orange) == 100,
+                "The formerly rejected gold button has only 100 orange pixels");
+            Check(MissionEvidence.GuildPublishEnabled(gold), "Gold gradients must enable publication");
+            Check(!MissionEvidence.GuildPublishEnabled(Frame(Color.Gray)), "A gray button cannot authorize a draw");
+            var unrelated = Frame(Color.Black, bitmap =>
+            {
+                using (var graphics = Graphics.FromImage(bitmap)) graphics.FillRectangle(Brushes.Gold, 436, 425, 96, 24);
+            });
+            Check(!MissionEvidence.GuildPublishEnabled(unrelated), "Gold outside the publication button must be ignored");
+        }
+
         private static void TransitionScreenStatus()
         {
             var io = new MissionIo { Current = Frame(Color.Black, bitmap => bitmap.SetPixel(10, 10, Color.White)) };
@@ -1357,7 +1557,8 @@ namespace FvmAssistant.Tests
             internal StageFrame Current;
             internal StageFrame AfterClick;
             internal int Clicks;
-            public StageFrame Grab() => Current;
+            internal Func<StageFrame> FrameSource;
+            public StageFrame Grab() => FrameSource == null ? Current : FrameSource();
             public Task ClickAsync(Point point, MouseButtonType button = MouseButtonType.Left)
             { Clicks++; if (AfterClick != null) Current = AfterClick; return Task.CompletedTask; }
             public void Move(Point point) { }
