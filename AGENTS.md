@@ -19,4 +19,18 @@ This repository is a Windows-only prototype for **美食大战老鼠**. Read `RE
 
 ## Security review
 
+Do not write real personal information, account details, or private operational
+records into Git-tracked files or files intended for Git. This includes account
+identifiers, server choices, balances, progression, inventory and reward ledgers,
+credentials, private URLs, location details, and unredacted diagnostics. Use
+synthetic examples or anonymized technical outcomes in source, tests,
+documentation, commit messages, and other Git content.
+
+Real local records may be saved only in untracked files under the ignored
+`.fvm-data/private-records/` directory or another explicitly ignored local path.
+Check both `git check-ignore` and `git ls-files` before writing private records;
+an ignore rule does not untrack an existing file. Never stage these records or
+force-add them. Use the repository-local anonymous Git identity for commits so
+personal names and email addresses are not reintroduced into commit metadata.
+
 Follow `docs/security.md`. The scanner reports only locations and rule names and has deliberate limits: review screenshots, binary files, logs, URLs, and unusual token formats manually. Treat any suspicious content as private until reviewed. If a secret is exposed, remove it from the proposed change and rotate or revoke it as appropriate before sharing.
