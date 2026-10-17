@@ -57,7 +57,7 @@ Other profiles store their panel settings, learned cards, captures, logs, genera
 
 ## Independent controller
 
-Run `FvmAssistant.exe --mode controller` from the Debug or Release output, or open the executable without arguments. This window does not initialize CEF. The `账号` tab stores a profile name, control port, server number or label, and entry URL. On the current 4399 portal, a numeric server such as `<server-number>` is selected by locating the visible number field and `进入` control, then sending CEF mouse and key events. Selection retries while those controls are unavailable; background network loading does not block a ready page. A direct server URL can also be used. If the page layout changes and those controls cannot be found, the controller stops and asks for manual selection. It does not inspect cookies or Flash storage. The account card list displays icons and supports inventory scanning, removal, and legacy room-deck learning. The `轨道` tab filters tracks by stage, previews the selected formation, creates new formations or edited copies, and keeps success markers per account, stage and track.
+Run `FvmAssistant.exe --mode controller` from the Debug or Release output, or open the executable without arguments. This window does not initialize CEF. The `账号` tab stores a profile name, control port, server number or label, and entry URL. On the current 4399 portal, a server number is selected by locating the visible number field and `进入` control, then sending CEF mouse and key events. Selection retries while those controls are unavailable; background network loading does not block a ready page. A direct server URL can also be used. If the page layout changes and those controls cannot be found, the controller stops and asks for manual selection. It does not inspect cookies or Flash storage. The account card list displays icons and supports inventory scanning, removal, and legacy room-deck learning. The `轨道` tab filters tracks by stage, previews the selected formation, creates new formations or edited copies, and keeps success markers per account, stage and track.
 
 The controller has four tabs: `账号`, `轨道`, `关卡队列`, and `双人任务`. The account tab separates **Card library** from **Account settings**, keeping scanning and the icon list visible. New workflow controls use English labels alongside existing Chinese labels. Each list sits beside its settings and actions. Choosing `加入关卡队列` on a track carries its path, account, and selected stage to the queue tab. It fills mappings for learned cards with matching names, or remembered account mappings; review any missing mappings before running. The bottom panel shows task output and provides a stop control and a shortcut to the private runtime directory.
 
@@ -409,6 +409,11 @@ For ordinary layer-3 cards, the first successful pick-up attempts learn foregrou
 Tracks may specify placement time (`035|49` means second 35 at cell 49) or a priority queue such as `优先队列=海星,海星,狮子座`. Both are supported. `绝` cards may bypass the priority queue; a support card can be placed to unblock its first target, and an unplaceable queue head is skipped after 30 seconds. A minimum flame count such as `海星 7[3]补极,0,0,200` is enforced when its digit masks are available. Wave-dependent changes and image conditions are not implemented.
 
 ## Recognition and retries
+
+The blue-pixel host-decision heuristic is enabled only inside a duo guest run.
+Solo and host execution, and unscoped screen inspection, do not infer that
+guest-only overlay from blue scenery and white cells. Recognized victory and
+blocking-notice templates retain priority in the guest context.
 
 | Signal | Current method |
 | --- | --- |

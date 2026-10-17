@@ -25,3 +25,8 @@ The `.gitignore` excludes `.fvm-data/` from ordinary staging. `scripts/check-sec
 4. If material was staged by mistake, unstage it and remove the secret from the file. If it reached a commit or another person, rotate/revoke the credential and clean the affected history before publishing. Deleting only the working-tree copy does not remove a committed secret.
 
 The scanner intentionally avoids printing matched values. It cannot recognize every secret, inspect binary content, or determine whether an ordinary-looking string is private. Human review remains required.
+
+Published verification notes should retain technical outcomes while omitting
+real account identifiers, server choices, balances, progression values, location
+details, and unrelated activity ledgers. Keep raw account evidence in private
+runtime storage; anonymizing current files does not remove earlier Git history.

@@ -117,7 +117,7 @@ namespace FvmAssistant.Automation
         public GrindLoop(IGameIo io, ScreenDetector detector, GrindSettings settings, string runDirectory)
         {
             _io = io;
-            _detector = detector;
+            _detector = detector?.ForExecution(settings.Duo?.Role == DuoRole.Guest);
             _settings = settings;
             _runDirectory = runDirectory;
             _track = settings.Track ?? TrackFile.Load(settings.TrackPath);

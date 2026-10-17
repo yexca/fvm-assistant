@@ -1,8 +1,15 @@
 # FvmAssistant prototype findings
 
+These records retain technical verification outcomes; account identifiers,
+server choices, balances, progression values, and unrelated activity ledgers
+are omitted. Raw evidence remains private.
+
 The prototype, originally named FvmSpike, was built to answer three questions: can an embedded Flash browser enter the 4399 game, can it capture moving game frames while hidden or minimized, and can it click the game without moving the real pointer? Tests on 2026-09-25 answered yes for off-screen rendering plus CEF-injected mouse events. The application is now named FvmAssistant.
 
 ## 2026-10-08 attended main-account tasks and activity rewards
+
+An attended single-account check verified guild publication and guarded reward
+claims from fresh selected-pane evidence.
 
 An attended solo 美味/深渊 run completed normal combat and boss continuation,
 reporting one completed normal round and one boss round. The festival board
@@ -41,6 +48,9 @@ not available in the inspected usable card list.
 
 ## 2026-10-07 attended missions and navigation repair
 
+An attended single-account check used OSR captures and CEF input to review
+mission publication and guarded reward claims.
+
 One 美味/可可日 round completed normal and boss stages and their rewards, with both round
 counters at one. The 融化冰渣 pane independently showed its boss objective at 1/1;
 its reward was claimed and verified 已领取. The run then failed while returning
@@ -63,17 +73,14 @@ One 火山/城堡 round completed normal and boss stages on the rebuilt Release 
 with both counters at one and a finished state in town. This live return also
 verified the corrected world-map label position. The 佳节打卡 board independently
 showed its A+ castle, online for 30 minutes and daily sign-in objectives complete;
-claiming displayed 领取奖励成功 and 已领取. The daily free wish also displayed
-success for one level-2 四叶草 and disabled its free-wish button.
+claiming displayed 领取奖励成功 and 已领取. The daily free-wish control
+disabled after a successful claim.
 
 One 火山/薄荷夜 normal round completed and returned to town. The selected
 穿游薄荷海滩 pane independently showed 1/1 for its objective to win with at least
-600 flames remaining. Its reward was claimed and verified 已领取. The
-美食大赛 board also showed its challenge to defeat a boss within 60 seconds
-of its appearance at 1/1; claiming displayed
-领取成功 and advanced it from Lv.4 to Lv.5. The enabled free Lv.5 reward was
-then claimed, displaying success and a check mark for one 威望币(币值100).
-Paid activation and reward tiers were not selected.
+600 flames remaining. Its reward was claimed and verified 已领取. The event
+board separately confirmed a completed timed-boss objective, and a guarded
+claim returned success.
 
 The new task-board open actions were checked in a restarted Release instance:
 `/missions?state=open` opened the account board from town;
@@ -97,10 +104,16 @@ checks do not establish live combat outcomes.
 
 ## 2026-10-02 attended missions and activity checks
 
-The main profile entered the configured server through its saved session. All game inspection
-and subsequent input used OSR captures and CEF input. The free seventh-day
-佳节打卡 action displayed success and changed the day to 已打卡. Completed
-常回家看看 and 每天领取勇士令牌 rewards were claimed with selected-pane guards.
+The attended check used OSR captures and CEF input. Reward claims were reviewed
+against fresh selected-pane evidence.
+
+The enabled gold 发布任务 button contained exactly 100 pixels satisfying the old
+orange test, which required more than 100. The action therefore returned
+unavailable although the task list said no leader tasks had been published.
+An attended CEF click opened the publication dialog; the existing one-draw
+action then published tasks and the publication button became disabled. The
+button check now includes its gold gradient in the same bounded region; gray buttons and unrelated gold pixels
+remain rejected by deterministic checks.
 
 One 美味/可可日 normal-and-boss round completed and returned to town with both
 round counters at one. The 融化冰渣 pane independently showed its boss objective
@@ -112,10 +125,8 @@ A subsequent normal-and-boss castle round completed, returned to town with both
 counters at one, and its private treasure capture showed SS. The event independently
 showed all three daily objectives complete after the free daily sign-in. Claiming
 then displayed 领取奖励成功 and 已领取.
-The 美食大赛 board also contained a completed low-energy clear challenge. Its
-verified reward advanced the event from Lv.3 to Lv.4; the newly enabled free Lv.4
-reward was claimed, showing success and a check mark for five 小金币袋. Paid
-activation and reward tiers were not selected.
+An event reward claim displayed success and disabled the eligible free-reward
+control. Paid activation and reward tiers were not selected.
 
 Two 港口 normal rounds completed without a boss continuation being observed.
 每天游港口 remained in progress and no task reward was claimed. The third repeat
@@ -153,7 +164,7 @@ transition reporting, or the finish control in a restarted instance.
 
 The inventory learner and visual track editor passed synthetic regression checks for grid calibration, reviewed-frame saving, stale captures, duplicate names, exact-time cell erasing, character headers, card-count updates, and undo. The controller, inventory scanner, and formation editor were rendered with synthetic card icons for layout inspection. Scanning controls and all seven board rows fit the controller's default window; the scanner and editor were also inspected at their minimum sizes. QA output remains in the ignored runtime directory.
 
-An attended live check after server maintenance used the main profile. The defense-card page had nine columns, six visible rows, and a 49-by-57-pixel pitch. Calibrating the native origin at (470,92) matched eight existing icons; a one-pixel error in each axis matched none. The scanner saved a reviewed seven-star 小笼包 icon, and room deck building successfully selected it with 日光炉, 红柳烤串机 and 棉花糖. This verifies learning from that inventory page and using its crop in room selection. Inventory paging still requires separate verification.
+An attended live check followed server maintenance. The defense-card page had nine columns, six visible rows, and a 49-by-57-pixel pitch. Calibrating the native origin at (470,92) matched eight existing icons; a one-pixel error in each axis matched none. The scanner saved a reviewed seven-star 小笼包 icon, and room deck building successfully selected it with 日光炉, 红柳烤串机 and 棉花糖. This verifies learning from that inventory page and using its crop in room selection. Inventory paging still requires separate verification.
 
 The attended run also exposed undersized thumbnails in the controller's compact formation preview; thumbnails now use the cell height while keeping cell labels visible. The scanner can align a slightly inaccurate origin using multiple distinct known icons, with bounded offsets and ambiguity rejection covered by synthetic regressions. During a 雪顶火山 run, the game disconnected before victory; automatic re-entry stopped when it could not find the learned 红柳烤串机 icon. Manual scrolling later exposed the matching icon and room deck building succeeded. Scroll observation now tolerates delayed frames, with a synthetic regression for delayed changes and a bounded wait at the actual list boundary. This does not establish the cause of the game-server disconnect or a successful 雪顶火山 clear.
 
@@ -165,7 +176,7 @@ The 花园 boss continuation disconnected before victory. The run re-entered the
 
 The updated capture/input build was checked against `tests/testpage` in an isolated off-screen profile. Four successive captures changed both normally and while minimized. CEF hover changed the button highlight, and clicks advanced its color indicator, including after reacquiring hover in the minimized window. The first click immediately after minimizing did not advance the indicator. No plugin crash or renderer termination was reported. These checks do not establish live battle stability.
 
-The controller had also timed out waiting for the portal's global loading flag, although its visible server controls could already be used. Selection now retries the existing visible-control check once the browser and renderer are ready. After the final restart, one missing-control observation was followed by automatic entry into saved the configured server without manual selection. The final Debug build, sensitive-data scan and scanner tests, area-menu tests, 48 automation regressions, documentation link-path check, and `git diff --check` passed. The final restart verified portal entry, not a complete gameplay round with the last reconnect repair.
+The controller had also timed out waiting for the portal's global loading flag, although its visible server controls could already be used. Selection now retries the existing visible-control check once the browser and renderer are ready. After the final restart, one missing-control observation was followed by automatic entry into the configured server without manual selection. The final Debug build, sensitive-data scan and scanner tests, area-menu tests, 48 automation regressions, documentation link-path check, and `git diff --check` passed. The final restart verified portal entry, not a complete gameplay round with the last reconnect repair.
 
 ## Components and operation
 
@@ -216,7 +227,7 @@ On 2026-09-26, the cloud-stage repair build passed a fresh local Flash check wit
 
 ## Real-game observation
 
-On 2026-09-25, a user manually logged into the configured server from the 4399 page. The first game iframe request timed out and a refresh recovered it. The embedded stage was located at page coordinate `(165,0)` with size 950×596 in a 1280×800 viewport. Captures kept updating while minimized, and injected hover/click events opened and closed the in-game inventory without using the real pointer. CefSharp off-screen mode is muted by default.
+On 2026-09-25, a user manually logged into the game from the 4399 page. The first game iframe request timed out and a refresh recovered it. The embedded stage was located at page coordinate `(165,0)` with size 950×596 in a 1280×800 viewport. Captures kept updating while minimized, and injected hover/click events opened and closed the in-game inventory without using the real pointer. CefSharp off-screen mode is muted by default.
 
 Game login may ask to allow Flash local storage; that preference is stored in the browser profile. The iframe, CDN, and login infrastructure are external and may be slow or unavailable. See [automation behavior](automation.md) for refresh handling and [security](security.md) for the privacy of profiles and captures.
 
@@ -270,8 +281,8 @@ after the user closed it, the same setup succeeded. Automatic room-number
 recognition and invitation-overlay detection remain open limitations. Local
 captures and run logs were kept outside the repository.
 
-On 2026-09-28, friend invitation pairing was checked live for
-美味/神殿. Both accounts navigated to a shared island area; the host created the 神殿 room,
+On 2026-09-28, friend invitation pairing was checked live for 美味/神殿.
+Both accounts navigated to the same island area; the host created the 神殿 room,
 invited the guest from the first online Friends row, and the guest accepted the
 timed prompt. The coordinator compared room headers before starting. The first
 battle reached normal victory, but the guest stopped because its “等待房主选择”
@@ -288,11 +299,27 @@ The visible 火山 area menu offered area 1 and area 11 as two rows. The
 friend-pair script had incorrectly used the area number as a consecutive row
 index, putting area 11 outside that menu. Its sparse mapping now selects the
 second row for area 11 and rejects unobserved area numbers before input.
-Both accounts were manually switched to 火山11区 using the corrected row;
+Both accounts were manually switched to the requested area using the corrected row;
 this verifies the selection coordinate, not the full automated pairing path.
 `scripts/test-friend-pair.ps1` exercises the mapping without game input.
 
+Two private opening-only plans passed duo preflight: the host used 日光炉
+and 红柳烤串机, while the guest used only 小火炉 on disjoint cells. These
+plans were not played and do not establish victory or an A+ result. The
+host created a 玛奇朵港 room, but the guest saw a level-locked area on its map
+and did not enter after an invitation. Direct stage selection also left the guest on that map. This does not establish whether
+an invitation can bypass the level requirement. The attended attempt stopped
+before combat, and the host left the empty room. The 佳节打卡 challenge
+requires an A+ port clear; no activity completion or reward was claimed.
+
 ## 2026-09-30 renderer-loss observation
+
+Before an attended 曲奇 carry run started, both accounts logged renderer
+termination with `OutOfMemory`. CEF browser objects
+still appeared initialized, cached Flash information remained in `/status`,
+and OSR captures returned the old game screens, while fresh frame discovery
+returned no frames. This prevented pairing; no carry battle was started and
+no completed round was reported.
 
 Renderer-loss guards now invalidate OSR captures, browser input, the displayed
 frame, and cached Flash status until navigation and fresh viewport paint prove
@@ -308,8 +335,6 @@ regressions, and both accounts were reopened from the updated Debug output.
 Both services reported `rendererReady=true` and no renderer terminations.
 Fresh live captures and CEF input worked during task inspection and room
 preparation; this does not validate recovery after an actual renderer failure.
-The guest's three eligible 曲奇 boss challenges were selected and verified
-in progress, and both accounts had existing 神殿钥匙.
 
 The host created a 曲奇 room and invited the confirmed guest from the Friends
 tab. The guest displayed the expected host and stage, but the attended capture
@@ -322,14 +347,25 @@ response rather than a model inspection round trip within that window.
 
 ## 2026-09-30 to 2026-10-01 attended port and carry runs
 
-In 美味一区, immediate invitation acceptance after about 0.52 seconds still
+The primary account completed one 火山/港口 round with boss continuation,
+using the existing recorded three-card solo track. The run reported boss
+Victory and one completed round, performed the free chest flip, and returned
+to town. Its private treasure capture showed an S rating. This establishes a
+solo clear, not the guest's ability to enter the port.
+
+In one island area, immediate invitation acceptance after about 0.52 seconds still
 did not put the guest in the host's room. After both accounts were visibly
-switched to a shared island area, the guest could see and join the host's room directly
-from its list. The observed 美味 area menu had all eleven rows, unlike the
+switched to another shared island area, the guest could see and join the host's
+room directly from its list. The observed 美味 area menu had all eleven rows, unlike the
 previous two-row observation. The pairing helper now counts visible gold
 row markers, accepts only the observed two-row and eleven-row layouts,
 and explicitly selects the Friends tab. Synthetic regressions cover the
 layout mapping; the modified helper's full live pairing flow remains unverified.
+
+One coordinated 曲奇 boss round and one coordinated 慕斯 boss round finished
+on both accounts with `roundsDone=1` and `bossRoundsDone=1`. The primary
+account supplied 日光炉 and 红柳烤串机; the guest brought only 小火炉.
+Guarded task claims were verified after the coordinated rounds.
 
 Repeated mission inspections without input produced different list hashes
 while the selected-pane hash stayed unchanged. Comparing private captures
@@ -340,10 +376,8 @@ remain separate. A deterministic regression verifies that header animation
 does not invalidate the guard but moved labels still do. Further battles were
 stopped for this repair. The updated guard has not yet been loaded into the
 two live instances or verified by a live accept action.
-After claiming all four rewards, attended visible-row clicks selected
-珍惜战斗伙伴LV3 and 无炸弹BOSS战03; both selected panes were verified
-任务进行中. No further battle was started. The two services remained idle
-with zero renderer terminations in this restarted session.
+The services remained idle with zero renderer terminations in this restarted
+session.
 
 The sensitive-data scan, scanner tests, area-menu regressions, independent
 Debug build, 40 automation regressions against that independent binary, and
@@ -363,6 +397,8 @@ avoid the game's water-stage ready warning; the two ordinary formations
 remained disjoint. Mission acceptance and reward claims used fresh task-board
 evidence, including the repaired stable list guard.
 
+A guarded guild-task reward claim was verified after an API timeout.
+
 火山/芥末日 normal combat ended in Victory. The guest's 钢丝球 was visibly
 placed on bare water without a plate. During the host's outcome fade, the
 generic guest-wait pixel heuristic temporarily misclassified the host screen.
@@ -381,21 +417,29 @@ For 美味/深渊, the friend-pair helper now compares the three activity-bar
 states and hides the bar before clicking a covered stage pin. The repaired
 path paired both accounts in the same room during the attended run.
 
+The complete 深渊 round then finished on both accounts with normal and boss
+counters at one. Guarded reward claims were verified afterward. The host also
+passed the normal victory-to-boss transition with the outcome recognition fix
+loaded.
+
 The first 城堡 preparation was blocked by the guest's full 道具 bag. Crafting
-material stacks were moved intact into existing 储藏室 space, leaving twelve
-free item slots. A subsequent battle disconnected during wave two and was
-not counted as a clear. The guest's original eighth-column targets also
+material stacks were moved intact into existing 储藏室 space to free item slots.
+A subsequent battle disconnected during wave two and was not counted as a
+clear. The guest's original eighth-column targets also
 refused cards; the attended replacement reserved column two for the guest
 and kept all host targets disjoint. Both accounts then completed the normal
 and boss round. The festival's castle A+ objective showed complete, and the
-guest's daily challenge reward displayed success and 已领取. Completed task
-claims also supplied the guest with 双层冰冻小笼包 for the rain-forest task.
+guest's daily challenge reward displayed success and 已领取. Task claims were
+reviewed against fresh evidence.
 
 Subsequent paired 火山/芥末日, 火山/芥末夜, 美味/咖喱日, 美味/咖喱夜,
 美味/布丁日, and 美味/布丁夜 runs completed normal and boss combat on both
 accounts. The 咖喱夜 boss settlement showed C and 22 damaged cards; completion
 does not establish the higher grade required by other tasks. Its guest fan
 placements did satisfy 风扇转转, whose reward was verified claimed.
+
+The fixed layer-5 burst path was exercised by the guest's own 酒瓶炸弹 in the
+two pudding stages. A task objective independently advanced after both runs.
 
 Inventory handling recovered guest space by merging exact duplicate stacks
 between the item bag and storage, then storing selected recipes and books.
@@ -423,6 +467,14 @@ as `RoomNotice` and an unobstructed room as `Room`; this is captured-frame
 verification, not a fresh live warning run. `make check` passed with 57
 automation regressions.
 
+The later attended carry session completed both normal and boss stages of
+火山/薄荷日 and 火山/薄荷夜 on both accounts. The guest's 横扫一切鼠患 task
+reached 15/15 and its reward was verified claimed. Five card/map information
+tasks were completed through the visible 情报岛 lists and verified claimed.
+A subsequent 炭烧日 attempt stopped at an item-bag warning before combat. The
+updated `RoomNotice` handling was exercised by fresh live warnings on both
+accounts. Remaining stage tasks were not treated as completed.
+
 Learning a room icon while hovering over its deck slot produced an icon which
 deck selection rejected as gray. Moving the pointer away and relearning the
 same card allowed selection. The learning method now parks the CEF pointer
@@ -433,6 +485,10 @@ the hover/click checks or a live test of the new learning method. Both game
 coordinators were confirmed idle and the isolated test app/server were closed.
 
 ## 2026-10-09 attended main tasks and inventory input
+
+An attended single-account check encountered a full equipment bag blocking
+reward collection. Visible inventory transfers and item use recovered capacity;
+no item was deleted and no paid purchase was made.
 
 The local API now supports held-button CEF drag input and right clicks. An
 isolated instance on the [local HTML pointer page](../tests/testpage/drag.html) verified one press, twelve
@@ -463,9 +519,8 @@ reported as completion of that mission.
 
 The first 布丁日 preparation stopped on a freshly observed `RoomNotice`: the
 full item bag would prevent obtaining loot. The notice was canceled before
-combat. Four 鱼刺-初级技能书 were subsequently used successfully, recovering
-an item slot. This live notice exercised the existing startup guard in the
-new Release instance.
+combat. Attended inventory handling recovered an item slot. This live notice
+exercised the existing startup guard in the new Release instance.
 
 The retried 美味/布丁日 normal round completed with five scheduled 日光炉
 placements and no producer replenishment. The selected 卡片限制! LV.3 pane
@@ -474,23 +529,17 @@ completed the growth task 灰机你别跑啊!, whose reward was verified claimed
 separately. The session completed four normal rounds and one boss round;
 five task rewards were verified claimed, including the two login tasks.
 
-The 美食活动 daily free wish displayed success for one 大喇叭 and disabled
-its free button. Eligible login and level-benefit controls were disabled;
-no new reward was claimed from those tabs. The main profile was left idle
-in 美味镇. Screenshots, the daily
-ledger, learned icons, and edited formations remain in the ignored runtime
-directory; no inventory item was deleted.
+Daily claim controls disabled after collection. Screenshots, account activity
+records, learned icons, and edited formations remain in the ignored runtime
+directory.
 
 ## 2026-10-11 attended main tasks and support retry repair
 
-Only the main profile was used. The guild-leader board published the day's
-tasks and then showed its publication control disabled; the displayed reward
-bonus was 33%. The selected leader task was 会潜水的鼠, requiring three
-submarine mice in 芥末小屋（日）. Two attended solo 火山/芥末日 normal rounds
-ended in Victory and returned to 美味镇, but the task remained at 0/3. A
-requested boss continuation did not enter a separate boss stage, so no boss
-clear is reported for this date. Other visible guild rows required a party or
-an S-grade result and were left pending for the main-only run.
+An attended single-account check verified guild publication and task-board
+navigation. Two solo 火山/芥末日 normal rounds ended in Victory and returned
+to town, but did not satisfy the selected boss objective. Requested boss
+continuation did not enter a separate stage. A separate map-information task
+was completed through 情报岛, and its guarded reward claim was verified.
 
 The two 芥末日 rounds exposed a support-map inefficiency: the fixed 木盘子
 layout retried many cells the stage rejected (126 and 119 refusal attempts in
@@ -503,6 +552,12 @@ the rebuilt Release process was loaded after the live session and left idle in
 live battle.
 
 ## 2026-10-14 attended main login and window visibility repair
+
+The saved main session had expired, so server selection initially stopped on
+the login page. The user completed login manually after the game window was
+restarted visibly. No password or verification code was read or entered by the
+assistant. After login, the configured server loaded and guild publication
+was verified by its disabled control.
 
 An attended solo 美味/神殿 run completed normal and boss combat and returned
 to town with both counters at one. 神殿中的法老 independently showed 1/1,
@@ -528,3 +583,47 @@ visible, normal window with a nonzero main-window handle. A subsequent manual
 API check changed the window to minimized and verified `onscreen` restored it
 to normal with `visible=true` and `iconic=false`; `top` verified foreground
 activation. This is a window-state check, separate from the live battles above.
+
+## 2026-10-16 attended main MCP check and cloud recognition repair
+
+An attended single-account check exercised the bridge and cloud-stage recovery.
+
+An attended client exercised the actual PowerShell stdio MCP bridge, negotiating
+2025-11-25 and discovering all 11 tools. Account state, complete catalog
+pagination, effective track inspection, validation, native image content and
+identified background startup were exercised. Separate bridge processes could
+query an accepted run; repeating its identical request returned the original
+run ID rather than starting another run. This checks the bridge protocol,
+not registration or rendering in a particular MCP client's interface.
+
+The first 火山/棉花日 attempt stopped without a completed round because blue
+clouds and a white cell matched the three-pixel guest host-decision heuristic.
+The live frame was still a battle, while the executor had reported Victory and
+then stopped at AwaitHostDecision. MCP reported a failed run with zero completed
+rounds and required attention; it did not report the mission completed.
+
+Screen detection now opts into that guest-only heuristic only for a duo guest
+execution context. Solo and host loops use a separate detector context with the
+heuristic disabled; ordinary state inspection also defaults to disabled. The
+guest context retains recognized victory/notice precedence. Synthetic coverage
+checks cloud-like pixels with a battle marker in both contexts. `make check`
+passed all 64 regressions, including MCP subprocess tests. A subsequent live
+solo attempt continued placing cards through the cloud scene that had stopped
+the first attempt.
+
+The retry completed one normal and one boss round and returned to town. The
+棉花日中尉 guild task independently displayed 1/1 before its guarded claim
+was verified claimed. The MCP run ended `completed`, with both completion
+counters at one, screen `Lobby`, and no error or attention flag.
+
+A second MCP plan used the existing private Laurel-day formation for
+浮空/月桂夜, with effective night support inherited and validation passing.
+It completed the normal stage and returned to town; 空袭来了! independently
+showed completion and its reward was verified claimed. A `stop_run` request in
+`finish-round` mode during this one-round run set the flag, preserved combat
+and rewards, and ended `completed` with one normal round and no boss round.
+All 11 exposed MCP tools were called during this attended session; immediate
+cancellation was not exercised.
+
+The final Release build and sensitive-data scan passed. The rebuilt main
+process reopened with its saved session after the attended gameplay.

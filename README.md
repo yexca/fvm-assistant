@@ -9,10 +9,10 @@ The current application is **FvmAssistant**, a working prototype rather than a p
 | Single-account 曲奇 stage loop | One live round completed with Victory, rewards, and return to 美味镇 |
 | Two accounts already paired in one 曲奇 room | One live round and then two consecutive rounds completed on both accounts; see the [manual two-account guide](docs/two-account.md) |
 | Two-account fixed water supports | Attended 可可日 and 可可夜 rounds completed normal and boss stages on both accounts with disjoint formations; see the [two-account guide](docs/two-account.md) |
-| Friend invitation pairing and two-account 美味/神殿 boss | One live round completed by both accounts in a shared island area, including boss and room return; see [two-account guide](docs/two-account.md) |
+| Friend invitation pairing and two-account 美味/神殿 boss | One live round completed by both accounts on the same server and island area, including boss and room return; see [two-account guide](docs/two-account.md) |
 | Automatic two-account room pairing with `-Level` | The host created a room, but live room-number recognition failed before the guest joined |
 | Single-account task queue | Read-only `-DryRun` checked; a live queue sequence has not been run |
-| Attended mission boards and rewards | Main profile published leader tasks, claimed a verified boss-task reward, and switched between account and guild boards through the local API; see [attended mission checks](docs/prototype-findings.md#2026-10-07-attended-missions-and-navigation-repair) |
+| Attended mission boards and rewards | An attended account published leader tasks, claimed a verified boss-task reward, and switched between account and guild boards through the local API; see [attended mission checks](docs/prototype-findings.md#2026-10-07-attended-missions-and-navigation-repair) |
 | Inventory card review and visual formation editor | Live learning and room selection of a seven-star 小笼包, automatic grid alignment, and drag editing verified; a newly drawn 花园 formation won the normal stage, then disconnected during boss continuation |
 
 ## Requirements
@@ -50,7 +50,7 @@ The separate controller window starts without a browser and is also the default 
 
 It manages account profiles and server choices, learned card icons, private tracks and success markers, stage queues, two-account runs, and per-account cleanup. Use **Scan 背包...** in the account tab to capture a manually opened inventory card page, calibrate its grid, and add reviewed icons without building a room deck first. The track tab filters by stage, previews formations, and offers **New formation...** and **Visual edit...** for placing cards directly on a 7×9 board. See [inventory card learning](docs/automation.md#inventory-card-learning) and [visual formation editing](docs/automation.md#editing-a-track-copy).
 
-A numeric server such as `<server-number>` is entered through the visible 4399 portal controls with CEF input; a saved direct server URL is also supported. The controller never inspects saved cookies. When a queue request opens a closed game window, it waits for a recognized game screen; if login has not completed, it asks you to log in. Two-account manual-room runs still require both accounts to be paired before starting.
+A server number is entered through the visible 4399 portal controls with CEF input; a saved direct server URL is also supported. The controller never inspects saved cookies. When a queue request opens a closed game window, it waits for a recognized game screen; if login has not completed, it asks you to log in. Two-account manual-room runs still require both accounts to be paired before starting.
 
 For several stages in sequence, `scripts/queue.ps1` validates a local JSON plan and runs each stage only after the previous one finishes. See [task queues](docs/automation.md#single-account-task-queues). In a solo run, **Finish current round** collects the current round's rewards and returns to town before another battle; immediate Stop remains available. The panel can preview a track's formations and timeline and [edit a separate copy](docs/automation.md#editing-a-track-copy) without overwriting the imported preset.
 

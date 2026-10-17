@@ -92,22 +92,26 @@ namespace FvmAssistant.Automation
         };
 
         private readonly TemplateLibrary _templates;
+        private readonly bool _allowGuestDecision;
 
-        public ScreenDetector(TemplateLibrary templates)
+        public ScreenDetector(TemplateLibrary templates, bool allowGuestDecision = false)
         {
             _templates = templates;
+            _allowGuestDecision = allowGuestDecision;
             var missing = Rules.SelectMany(r => r.all).Concat(new[] { "房间_2P等待中", "房间_2P已关闭" })
                 .Distinct().Where(n => !templates.Contains(n)).ToList();
             if (missing.Count > 0)
                 throw new KeyNotFoundException("missing templates: " + string.Join(", ", missing));
         }
 
+        internal ScreenDetector ForExecution(bool guest) => new ScreenDetector(_templates, guest);
+
         public GameScreen Detect(StageFrame frame)
         {
             foreach (var (screen, all) in Rules)
             {
                 // Pixel heuristics must not hide a positively recognized victory or notice.
-                if (screen == GameScreen.Loot && AwaitingHostDecision(frame)) return GameScreen.AwaitHostDecision;
+                if (_allowGuestDecision && screen == GameScreen.Loot && AwaitingHostDecision(frame)) return GameScreen.AwaitHostDecision;
                 bool match = screen == GameScreen.RoomList
                     ? RoomListOffset(frame) != null
                     : all.All(n => Diff(n, frame) < Tolerance);

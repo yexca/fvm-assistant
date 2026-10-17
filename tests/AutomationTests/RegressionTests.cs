@@ -1999,7 +1999,7 @@ namespace FvmAssistant.Tests
                 }
             var library = new TemplateLibrary();
             library.LoadDirectory(path);
-            var detector = new ScreenDetector(library);
+            var detector = new ScreenDetector(library, allowGuestDecision: true);
             StageFrame Choice(string marker) => Frame(Color.Black, bitmap =>
             {
                 bitmap.SetPixel(475, 290, Color.FromArgb(130, 180, 230));
@@ -2010,6 +2010,13 @@ namespace FvmAssistant.Tests
             Check(detector.Detect(Choice(null)) == GameScreen.AwaitHostDecision, "The guest overlay must remain recognized");
             Check(detector.Detect(Choice("胜利弹窗")) == GameScreen.VictoryDialog, "A host victory must outrank the guest heuristic");
             Check(detector.Detect(Choice("健康提示")) == GameScreen.HealthNotice, "A recognized notice must outrank the guest heuristic");
+            var cloudBattle = Choice("退出按钮");
+            Check(detector.ForExecution(false).Detect(cloudBattle) == GameScreen.Battle,
+                "Blue clouds and a white board cell must not end a solo or host battle");
+            Check(new ScreenDetector(library).Detect(cloudBattle) == GameScreen.Battle,
+                "Unscoped state inspection must not infer a guest-only overlay");
+            Check(detector.ForExecution(true).Detect(cloudBattle) == GameScreen.AwaitHostDecision,
+                "The guest execution context must retain its host-decision observation");
             StageFrame Room(bool notice) => Frame(Color.Black, bitmap =>
             {
                 bitmap.SetPixel(points["选卡界面"].X, points["选卡界面"].Y, Color.White);

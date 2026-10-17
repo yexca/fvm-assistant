@@ -74,8 +74,8 @@ The friend invitation path can pair two logged-in accounts from a lobby map on
 the same server. The host and guest are sent to the requested island and area;
 the host creates the stage room, invites the guest from a configured row of the
 online Friends list, and the guest accepts the prompt. The guest row is
-one-based and must identify the intended account. For 美味/神殿, area 11 and row 1
-were checked live.
+one-based and must identify the intended account. For 美味/神殿, a shared
+island area and a reviewed Friends row were checked live. The example below requires your own area and row selection.
 
 Two area-menu layouts have been observed: a sparse menu containing area 1
 followed by area 11, and a contiguous menu containing all eleven areas. The
